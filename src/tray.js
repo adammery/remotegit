@@ -59,6 +59,14 @@ function ago(sec) {
 // ---------------------------------------------------------------- SSH
 
 const connections = new Map();
+const connState = new Map(); // serverId -> 'connecting' | 'ok' | 'error'
+const dot = (serverId) => h('span', { class: 'dot ' + ({ ok: 'ok', connecting: 'busy', error: 'err' }[connState.get(serverId)] || ''), title: { ok: 'Connected', connecting: 'Connecting…', error: 'Not reachable' }[connState.get(serverId)] || 'Not connected yet' });
+
+function setConn(serverId, state) {
+  if (connState.get(serverId) === state) return;
+  connState.set(serverId, state);
+  render();
+}
 const targetOf = (s) => ({
   host: s.host,
   user: s.user || null,
@@ -67,14 +75,33 @@ const targetOf = (s) => ({
   forwardAgent: !!s.forwardAgent,
 });
 
-async function execOn(server, script, timeoutSecs = 60) {
+function connect(server) {
   if (!connections.has(server.id)) {
+    if (connState.get(server.id) !== 'ok') setConn(server.id, 'connecting');
     const p = tauri.core.invoke('ssh_connect', { id: server.id, target: targetOf(server) });
     connections.set(server.id, p);
-    p.catch(() => connections.delete(server.id));
+    p.then(
+      () => setConn(server.id, 'ok'),
+      () => {
+        connections.delete(server.id);
+        setConn(server.id, 'error');
+      },
+    );
   }
-  await connections.get(server.id);
-  return tauri.core.invoke('ssh_exec', { id: server.id, script, timeoutSecs });
+  return connections.get(server.id);
+}
+
+async function execOn(server, script, timeoutSecs = 60) {
+  await connect(server);
+  try {
+    const r = await tauri.core.invoke('ssh_exec', { id: server.id, script, timeoutSecs });
+    setConn(server.id, 'ok');
+    return r;
+  } catch (e) {
+    connections.delete(server.id);
+    setConn(server.id, 'error');
+    throw e;
+  }
 }
 
 // ---------------------------------------------------------------- state
@@ -195,9 +222,24 @@ function render() {
     { class: 'tray-head' },
     h(
       'button',
-      { class: 'tray-repo' + (T.picking ? ' open' : ''), type: 'button', onclick: () => { T.picking = !T.picking; render(); }, disabled: !repos.length },
+      {
+        class: 'tray-repo' + (T.picking ? ' open' : ''),
+        type: 'button',
+        disabled: !repos.length,
+        onclick: () => {
+          T.picking = !T.picking;
+          render();
+          // Check every server so the list shows which ones are reachable.
+          if (T.picking) for (const s of servers) connect(s).catch(() => {});
+        },
+      },
       h('span', { html: icons.repo }),
-      h('span', { class: 'grow' }, h('span', { class: 'name' }, T.repo?.name || 'No repository'), h('span', { class: 'where' }, T.server ? T.server.name || T.server.host : 'Add one in the main window')),
+      h(
+        'span',
+        { class: 'grow' },
+        h('span', { class: 'name' }, T.repo?.name || 'No repository'),
+        h('span', { class: 'where' }, T.server && dot(T.server.id), T.server ? T.server.name || T.server.host : 'Add one in the main window'),
+      ),
       h('span', { html: icons.caret }),
     ),
     h('button', { class: 'btn-icon', type: 'button', title: 'Open RemoteGit', html: icons.external, onclick: openMain }),
@@ -210,7 +252,7 @@ function render() {
         'div',
         { class: 'tray-picker' },
         servers.map((s) => [
-          h('div', { class: 'pop-group' }, s.name || s.host),
+          h('div', { class: 'pop-group' }, dot(s.id), h('span', { class: 'grow' }, s.name || s.host), h('span', { class: 'sub' }, { ok: 'connected', connecting: 'connecting…', error: 'not reachable' }[connState.get(s.id)] || '')),
           repos
             .filter((r) => r.serverId === s.id)
             .map((r) =>
@@ -227,7 +269,7 @@ function render() {
   } else if (!T.repo) {
     parts.push(h('div', { class: 'tray-clean' }, h('b', {}, 'No repositories yet'), 'Add a server and a repository in the main window.', h('button', { class: 'btn btn-primary', type: 'button', onclick: openMain }, 'Open RemoteGit')));
   } else if (T.error && !T.status) {
-    parts.push(h('div', { class: 'tray-error' }, h('b', {}, `Can’t reach ${T.server?.name || 'the server'}`), h('div', { class: 'error-box' }, T.error), h('button', { class: 'btn', type: 'button', onclick: () => { connections.clear(); T.error = null; refresh(); } }, 'Try again')));
+    parts.push(h('div', { class: 'tray-error' }, h('b', {}, `Can’t reach ${T.server?.name || 'the server'}`), h('div', { class: 'error-box' }, T.error), h('button', { class: 'btn', type: 'button', onclick: () => { connections.delete(T.server.id); T.error = null; refresh(); } }, 'Try again')));
   } else if (!T.status) {
     parts.push(h('div', { class: 'tray-clean' }, T.busy ? `${T.busy}…` : 'Loading…'));
   } else {

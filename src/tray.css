@@ -31,7 +31,7 @@
 .tray-repo:hover, .tray-repo.open { background: var(--toolbar-hover); }
 .tray-repo .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .tray-repo .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tray-repo .where { font-size: 11px; color: var(--toolbar-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tray-repo .where { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--toolbar-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .tray-picker { flex: 1; overflow-y: auto; }
 .tray-picker .pop-group { padding-top: 10px; }
@@ -79,3 +79,4 @@
 
 .tray-error { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
 .tray-error .error-box { margin: 0; }
+.tray-picker .pop-group .sub { font-weight: 400; font-size: 11px; }

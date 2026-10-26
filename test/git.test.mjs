@@ -1,12 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as git from '../src/git.js';
 
-const root = mkdtempSync(join(tmpdir(), 'remotegit-test-'));
+// realpath: on macOS the temp dir is behind the /var -> /private/var symlink.
+const root = realpathSync(mkdtempSync(join(tmpdir(), 'remotegit-test-')));
 const gitconfig = join(root, 'gitconfig');
 writeFileSync(gitconfig, '[user]\n\tname = Test User\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n');
 const env = { ...process.env, GIT_CONFIG_GLOBAL: gitconfig, GIT_CONFIG_NOSYSTEM: '1', HOME: root };

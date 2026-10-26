@@ -23,6 +23,9 @@ struct Target {
     identity_file: Option<String>,
     #[serde(default)]
     forward_agent: bool,
+    /// Repositories on this computer: a local shell instead of SSH.
+    #[serde(default)]
+    local: bool,
 }
 
 #[derive(Serialize)]
@@ -41,6 +44,9 @@ struct Conn {
 impl Conn {
     fn spawn(&self) -> Result<ssh::Session, String> {
         let t = &self.target;
+        if t.local {
+            return ssh::Session::spawn(ssh::local_shell()?);
+        }
         let cmd = ssh::ssh_command(
             &t.host,
             t.user.as_deref(),
@@ -175,6 +181,20 @@ fn set_tray_status(app: AppHandle, title: Option<String>, tooltip: String) {
 }
 
 #[tauri::command]
+fn set_tray_visible(app: AppHandle, visible: bool) -> Result<(), String> {
+    if !visible {
+        if let Some(w) = app.get_webview_window("tray") {
+            let _ = w.hide();
+        }
+    }
+    match app.tray_by_id(TRAY_ID) {
+        Some(tray) => tray.set_visible(visible).map_err(|e| e.to_string()),
+        None if visible => build_tray(&app).map_err(|e| e.to_string()),
+        None => Ok(()),
+    }
+}
+
+#[tauri::command]
 fn set_menu_bar_only(app: AppHandle, state: State<'_, MenuBarOnly>, enabled: bool) {
     state.0.store(enabled, Ordering::Relaxed);
     #[cfg(target_os = "macos")]
@@ -191,7 +211,8 @@ fn set_menu_bar_only(app: AppHandle, state: State<'_, MenuBarOnly>, enabled: boo
     }
 }
 
-fn build_tray(app: &tauri::App) -> tauri::Result<()> {
+/// Created on first use: the icon only appears once the user turns it on.
+fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open RemoteGit", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit RemoteGit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &quit])?;
@@ -230,10 +251,6 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(Conns::default())
         .manage(MenuBarOnly::default())
-        .setup(|app| {
-            build_tray(app)?;
-            Ok(())
-        })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 let app = window.app_handle();
@@ -255,6 +272,7 @@ fn main() {
             ssh_disconnect,
             show_main_window,
             set_tray_status,
+            set_tray_visible,
             set_menu_bar_only
         ])
         .run(tauri::generate_context!())

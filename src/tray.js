@@ -73,6 +73,7 @@ const targetOf = (s) => ({
   port: s.port ? Number(s.port) : null,
   identityFile: s.identityFile || null,
   forwardAgent: !!s.forwardAgent,
+  local: !!s.local,
 });
 
 function connect(server) {
@@ -284,7 +285,7 @@ function render() {
         'label',
         { class: 'check', title: 'Hide RemoteGit from the Dock / taskbar and keep it here' },
         h('input', { type: 'checkbox', checked: !!prefs.menuBarOnly, onchange: (e) => setMenuBarOnly(e.target.checked) }),
-        'Menu bar only',
+        /Mac/.test(navigator.platform || navigator.userAgent) ? 'Hide from the Dock' : 'Hide from the taskbar',
       ),
       h('button', { class: 'btn btn-sm', type: 'button', onclick: openMain }, 'Open RemoteGit'),
     ),

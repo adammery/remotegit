@@ -70,6 +70,7 @@ const handlers = {
   show_main_window: () => null,
   set_tray_status: ({ title }) => (console.log('[preview] tray title', JSON.stringify(title)), null),
   set_menu_bar_only: () => null,
+  set_tray_visible: () => null,
 };
 
 createServer(async (req, res) => {

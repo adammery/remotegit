@@ -144,6 +144,7 @@ const targetOf = (s) => ({
   port: s.port ? Number(s.port) : null,
   identityFile: s.identityFile || null,
   forwardAgent: !!s.forwardAgent,
+  local: !!s.local,
 });
 
 function connect(server) {
@@ -588,6 +589,7 @@ function confirmDiscard(files) {
 
 function vscodeUrl() {
   const s = S.server;
+  if (s.local) return `vscode://file${S.repo.path.startsWith('/') ? '' : '/'}${encodeURI(S.repo.path)}`;
   const host = (s.user ? `${s.user}@` : '') + s.host;
   return `vscode://vscode-remote/ssh-remote+${encodeURI(host)}${encodeURI(S.repo.path)}`;
 }
@@ -852,6 +854,7 @@ function card({ title, sub, button, onclick, primary, highlight }) {
 function welcomeView() {
   return blank('Welcome to RemoteGit', 'Work with Git repositories that live on your servers, over SSH — like GitHub Desktop, but remote.', [
     card({ title: 'Add a server', sub: 'Uses your SSH keys and ~/.ssh/config. Nothing to install on the server besides git.', button: 'Add server', onclick: () => serverModal(), primary: true }),
+    card({ title: 'Use repositories on this computer', sub: isMac ? 'Works like GitHub Desktop, with git on this Mac.' : 'Works like GitHub Desktop, with Git for Windows on this PC.', button: 'Add this computer', onclick: addThisComputer }),
   ]);
 }
 
@@ -874,6 +877,7 @@ function errorView() {
       h('p', { class: 'lead' }, conn ? 'The SSH connection failed. RemoteGit will keep retrying in the background.' : S.repo.path),
       h('div', { class: 'error-box' }, S.error.message),
       conn &&
+        !S.server.local &&
         h('p', { class: 'hint' }, 'RemoteGit signs in with SSH keys (no password prompts). Check that “ssh ', (S.server.user ? S.server.user + '@' : '') + S.server.host, '” works in a terminal without asking for a password — e.g. run ssh-copy-id first.'),
       h(
         'div',
@@ -896,8 +900,10 @@ function noChangesView() {
     cards.push(card({ highlight: true, primary: true, title: `Pull ${st.branch.behind} commit${st.branch.behind > 1 ? 's' : ''} from ${st.remote.name}`, sub: 'The remote branch has commits you don’t have yet.', button: `Pull ${st.remote.name}`, onclick: () => runSync(action) }));
   if (action?.kind === 'publish')
     cards.push(card({ highlight: true, primary: true, title: 'Publish your branch', sub: `“${st.branch.head}” doesn’t exist on ${st.remote.name} yet.`, button: 'Publish branch', onclick: () => runSync(action) }));
-  cards.push(card({ title: 'Open the repository in Visual Studio Code', sub: 'Opens on the server through the Remote - SSH extension.', button: 'Open in VS Code', onclick: () => openExternal(vscodeUrl()) }));
-  cards.push(card({ title: 'Open a terminal in this repository', sub: 'Copies an ssh command that lands in this folder.', button: 'Copy SSH command', onclick: () => copyText(sshCommand()) }));
+  cards.push(card({ title: 'Open the repository in Visual Studio Code', sub: S.server.local ? 'Opens the folder in VS Code.' : 'Opens on the server through the Remote - SSH extension.', button: 'Open in VS Code', onclick: () => openExternal(vscodeUrl()) }));
+  if (S.server.local)
+    cards.push(card({ title: `Show the repository in ${isMac ? 'Finder' : 'Explorer'}`, sub: S.repo.path, button: `Show in ${isMac ? 'Finder' : 'Explorer'}`, onclick: () => tauri.opener?.revealItemInDir(S.repo.path).catch((e) => toast(String(e), 'error')) }));
+  else cards.push(card({ title: 'Open a terminal in this repository', sub: 'Copies an ssh command that lands in this folder.', button: 'Copy SSH command', onclick: () => copyText(sshCommand()) }));
   const web = git.webUrl(st.remote?.url);
   if (web) {
     const host = new URL(web).hostname.replace(/^www\./, '');
@@ -1148,7 +1154,7 @@ function serverPopover() {
           'div',
           { class: 'grow' },
           h('div', { class: 'title' }, server ? server.name || server.host : 'All servers'),
-          h('div', { class: 'sub' }, server ? `${server.user ? server.user + '@' : ''}${server.host} · ${repoCount(server)}` : repoCount(null)),
+          h('div', { class: 'sub' }, server ? `${server.local ? 'This computer' : (server.user ? server.user + '@' : '') + server.host} · ${repoCount(server)}` : repoCount(null)),
         ),
         current && h('span', { html: icons.check }),
         server && h('button', { class: 'btn-icon always', type: 'button', title: 'Server settings', html: icons.gear, onclick: (e) => { e.stopPropagation(); closePopover(); serverModal(server); } }),
@@ -1179,10 +1185,20 @@ function trayPrefs() {
     return {};
   }
 }
-function setMenuBarOnly(enabled) {
+function writeTrayPrefs(patch) {
   try {
-    localStorage.setItem(TRAY_KEY, JSON.stringify({ ...trayPrefs(), menuBarOnly: enabled }));
+    localStorage.setItem(TRAY_KEY, JSON.stringify({ ...trayPrefs(), ...patch }));
   } catch {}
+}
+function setShowInMenuBar(visible) {
+  writeTrayPrefs({ showInMenuBar: visible });
+  tauri.core.invoke('set_tray_visible', { visible }).catch(() => {});
+  // Without the icon there'd be no way back to a hidden app.
+  if (!visible && trayPrefs().menuBarOnly) setMenuBarOnly(false);
+}
+function setMenuBarOnly(enabled) {
+  if (enabled && !trayPrefs().showInMenuBar) setShowInMenuBar(true);
+  writeTrayPrefs({ menuBarOnly: enabled });
   tauri.core.invoke('set_menu_bar_only', { enabled }).catch(() => {});
 }
 
@@ -1199,11 +1215,18 @@ function settingsPopover() {
           seg([['system', 'System'], ['light', 'Light'], ['dark', 'Dark']], store.theme || 'system', (v) => { store.theme = v; save(); applyTheme(); fill(); }),
           h('div', { class: 'settings-label' }, 'Refresh changes every'),
           seg([[2, '2 s'], [3, '3 s'], [5, '5 s'], [10, '10 s']], store.pollSeconds, (v) => { store.pollSeconds = v; save(); schedulePoll(); fill(); }),
+          h('div', { class: 'settings-label' }, isMac ? 'Menu bar' : 'System tray'),
           h(
             'label',
             { class: 'check settings-check' },
-            h('input', { type: 'checkbox', checked: !!trayPrefs().menuBarOnly, onchange: (e) => setMenuBarOnly(e.target.checked) }),
-            h('span', {}, h('b', {}, 'Menu bar only'), h('br'), h('span', { class: 'hint' }, isMac ? 'Hide RemoteGit from the Dock. Click its icon in the menu bar to open it.' : 'Hide RemoteGit from the taskbar. Click its icon in the system tray to open it.')),
+            h('input', { type: 'checkbox', checked: !!trayPrefs().showInMenuBar, onchange: (e) => { setShowInMenuBar(e.target.checked); fill(); } }),
+            h('span', {}, h('b', {}, isMac ? 'Show in menu bar' : 'Show in system tray'), h('br'), h('span', { class: 'hint' }, 'A small window with changes, commit and push, one click away.')),
+          ),
+          h(
+            'label',
+            { class: 'check settings-check' + (trayPrefs().showInMenuBar ? '' : ' off') },
+            h('input', { type: 'checkbox', checked: !!trayPrefs().menuBarOnly, disabled: !trayPrefs().showInMenuBar, onchange: (e) => { setMenuBarOnly(e.target.checked); fill(); } }),
+            h('span', {}, h('b', {}, isMac ? 'Hide from the Dock' : 'Hide from the taskbar'), h('br'), h('span', { class: 'hint' }, 'Closing the window keeps RemoteGit running in the menu bar.')),
           ),
           h('button', { class: 'btn btn-block', type: 'button', onclick: () => { closePopover(); shortcutsModal(); } }, 'Keyboard shortcuts'),
         ),
@@ -1233,7 +1256,7 @@ const SHORTCUTS = [
   ['Mod+Enter', 'Commit', () => doCommit()],
   ['Mod+Shift+M', 'Generate commit message with AI', () => generateMessage()],
   ['Mod+Shift+A', 'Open in Visual Studio Code', () => S.repo && openExternal(vscodeUrl())],
-  ['Mod+`', 'Copy SSH command for a terminal', () => S.repo && copyText(sshCommand())],
+  ['Mod+`', 'Copy SSH command for a terminal', () => S.repo && !S.server.local && copyText(sshCommand())],
   ['Mod+Shift+G', 'View on GitHub', () => { const w = git.webUrl(S.status?.remote?.url); if (w) openExternal(w); }],
   ['Mod+Shift+Backspace', 'Discard all changes', () => currentFiles().length && confirmDiscard(currentFiles())],
   ['Mod+R', 'Refresh', () => refresh()],
@@ -1550,17 +1573,47 @@ function serverModal(existing) {
     h('button', { class: 'btn', type: 'button', onclick: () => pickKey(key, error) }, h('span', { html: icons.folder }), 'Browse…');
   const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, existing ? 'Save' : 'Connect');
   const testBtn = h('button', { class: 'btn', type: 'button' }, 'Test connection');
+  let local = !!s.local;
+  const sshFields = h(
+    'div',
+    { class: 'field-stack' },
+    field('Host', host),
+    h('div', { class: 'field-row' }, field('User', user), field('Port', port)),
+    field('SSH key', h('div', { class: 'input-row' }, key, browse), 'The private key file (not .pub). Leave empty to use your SSH agent and ~/.ssh/config.'),
+    h('label', { class: 'check' }, agent, h('span', {}, h('b', {}, 'Forward my SSH agent'), h('br'), h('span', { class: 'hint' }, 'Lets push/pull on the server use the keys from this computer (e.g. for GitHub).'))),
+  );
+  const localNote = h(
+    'div',
+    { class: 'hint' },
+    isMac
+      ? 'Repositories on this Mac. Needs git (Xcode Command Line Tools or Homebrew).'
+      : 'Repositories on this PC. Needs Git for Windows, which provides the sh.exe RemoteGit runs git through.',
+  );
+  const kind = h('div', { class: 'segmented' });
+  const fillKind = () => {
+    kind.replaceChildren(
+      ...[[false, 'Server over SSH'], [true, 'This computer']].map(([v, label]) =>
+        h('button', { type: 'button', class: v === local ? 'active' : '', disabled: !!existing && v !== local, onclick: () => { local = v; fillKind(); } }, label),
+      ),
+    );
+    sshFields.hidden = local;
+    localNote.hidden = !local;
+    name.placeholder = local ? 'This computer' : 'My server';
+  };
+  fillKind();
 
   const readDraft = () => {
-    const draft = {
-      id: s.id || uid(),
-      name: name.value.trim() || host.value.trim(),
-      host: host.value.trim(),
-      user: user.value.trim(),
-      port: port.value ? Number(port.value) : null,
-      identityFile: key.value.trim(),
-      forwardAgent: agent.checked,
-    };
+    const draft = local
+      ? { id: s.id || uid(), name: name.value.trim() || 'This computer', host: 'localhost', local: true }
+      : {
+          id: s.id || uid(),
+          name: name.value.trim() || host.value.trim(),
+          host: host.value.trim(),
+          user: user.value.trim(),
+          port: port.value ? Number(port.value) : null,
+          identityFile: key.value.trim(),
+          forwardAgent: agent.checked,
+        };
     if (!draft.host) {
       error.textContent = 'Enter a host.';
       return null;
@@ -1571,15 +1624,7 @@ function serverModal(existing) {
 
   openModal({
     title: existing ? 'Server settings' : 'Add a server',
-    body: [
-      field('Name', name),
-      field('Host', host),
-      h('div', { class: 'field-row' }, field('User', user), field('Port', port)),
-      field('SSH key', h('div', { class: 'input-row' }, key, browse), 'The private key file (not .pub). Leave empty to use your SSH agent and ~/.ssh/config.'),
-      h('label', { class: 'check' }, agent, h('span', {}, h('b', {}, 'Forward my SSH agent'), h('br'), h('span', { class: 'hint' }, 'Lets push/pull on the server use the keys from this computer (e.g. for GitHub).'))),
-      report,
-      error,
-    ],
+    body: [kind, field('Name', name), sshFields, localNote, report, error],
     foot: (close) => [
       existing && h('button', { class: 'btn btn-danger left', type: 'button', onclick: () => { close(); removeServer(existing); } }, 'Remove server'),
       testBtn,
@@ -1612,9 +1657,9 @@ command -v claude >/dev/null 2>&1 && echo "claude ok" || echo "claude missing"`,
       const who = /^user (.+)$/m.exec(out)?.[1];
       const gitVer = /^git version (\S+)/m.exec(out)?.[1];
       report.replaceChildren(
-        line(true, `Connected as ${who || draft.host}`),
+        line(true, draft.local ? `Running as ${who || 'you'} on this computer` : `Connected as ${who || draft.host}`),
         line(!!gitVer, gitVer ? `Git ${gitVer}` : 'Git is not installed on the server'),
-        line(/^gh ok$/m.test(out), /^gh ok$/m.test(out) ? 'GitHub CLI signed in — pull requests available' : /^gh signed-out$/m.test(out) ? 'GitHub CLI found but not signed in (run gh auth login on the server)' : 'GitHub CLI not installed — no pull request list'),
+        line(/^gh ok$/m.test(out), /^gh ok$/m.test(out) ? 'GitHub CLI signed in — pull requests available' : /^gh signed-out$/m.test(out) ? `GitHub CLI found but not signed in (run gh auth login ${draft.local ? 'in a terminal' : 'on the server'})` : 'GitHub CLI not installed — no pull request list'),
         line(/^claude ok$/m.test(out), /^claude ok$/m.test(out) ? 'Claude Code found — AI commit messages available' : 'Claude Code not installed — no AI commit messages'),
       );
     } catch (e) {
@@ -1672,6 +1717,21 @@ async function pickKey(input, error) {
   } catch (e) {
     error.textContent = String(e);
   }
+}
+
+async function addThisComputer() {
+  const existing = store.servers.find((s) => s.local);
+  if (existing) return addRepoModal(existing);
+  const server = { id: uid(), name: 'This computer', host: 'localhost', local: true };
+  try {
+    await connect(server);
+  } catch (e) {
+    return toast(e.message, 'error', 'Can’t use git on this computer');
+  }
+  store.servers.push(server);
+  save();
+  renderAll();
+  addRepoModal(server);
 }
 
 function removeServer(server) {
@@ -1785,7 +1845,29 @@ function addRepoModal(preselected) {
           'div',
           { class: 'input-row' },
           manual,
-          h('button', { class: 'btn', type: 'button', onclick: () => folderBrowser(server, manual.value.trim() || '~', (path) => { manual.value = path; addManual(); }) }, h('span', { html: icons.folder }), 'Browse…'),
+          h(
+            'button',
+            {
+              class: 'btn',
+              type: 'button',
+              onclick: async () => {
+                if (server.local && tauri.dialog) {
+                  const picked = await tauri.dialog.open({ directory: true, multiple: false, title: 'Choose a repository folder' }).catch(() => null);
+                  if (typeof picked === 'string') {
+                    manual.value = picked;
+                    addManual();
+                  }
+                  return;
+                }
+                folderBrowser(server, manual.value.trim() || '~', (path) => {
+                  manual.value = path;
+                  addManual();
+                });
+              },
+            },
+            h('span', { html: icons.folder }),
+            'Browse…',
+          ),
           h('button', { class: 'btn', type: 'button', onclick: addManual }, 'Add'),
         ),
       ),
@@ -2033,7 +2115,8 @@ function init() {
   $('#ai-btn').addEventListener('click', generateMessage);
   applyTheme();
   renderCommitFlags();
-  if (trayPrefs().menuBarOnly) {
+  if (trayPrefs().showInMenuBar) tauri.core.invoke('set_tray_visible', { visible: true }).catch(() => {});
+  if (trayPrefs().showInMenuBar && trayPrefs().menuBarOnly) {
     // Start straight in the menu bar; the tray icon brings the window back.
     tauri.core.invoke('set_menu_bar_only', { enabled: true }).catch(() => {});
     try {

@@ -78,6 +78,52 @@ pub fn ssh_command(
     Ok(cmd)
 }
 
+/// A shell on this computer, for repositories that aren't on a server. It
+/// speaks the same protocol as the remote `sh`, so the UI can't tell the
+/// difference.
+pub fn local_shell() -> Result<Command, String> {
+    #[cfg(windows)]
+    {
+        let sh = find_git_sh().ok_or_else(|| {
+            "Local repositories on Windows need Git for Windows (it provides sh.exe). Install it from git-scm.com."
+                .to_string()
+        })?;
+        Ok(Command::new(sh))
+    }
+    #[cfg(not(windows))]
+    {
+        // Apps started from Finder get a minimal PATH; add the usual git homes.
+        let path = std::env::var("PATH").unwrap_or_default();
+        let mut cmd = Command::new("/bin/sh");
+        cmd.env("PATH", format!("/opt/homebrew/bin:/usr/local/bin:{path}"));
+        Ok(cmd)
+    }
+}
+
+#[cfg(windows)]
+fn find_git_sh() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    let mut candidates: Vec<PathBuf> = ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"]
+        .iter()
+        .filter_map(|v| std::env::var(v).ok())
+        .map(|dir| PathBuf::from(dir).join("Git").join("bin").join("sh.exe"))
+        .collect();
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        candidates.push(PathBuf::from(local).join("Programs").join("Git").join("bin").join("sh.exe"));
+    }
+    // git.exe on PATH lives in <Git>\cmd or <Git>\bin; sh.exe is in <Git>\bin.
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            if dir.join("git.exe").is_file() {
+                if let Some(root) = dir.parent() {
+                    candidates.push(root.join("bin").join("sh.exe"));
+                }
+            }
+        }
+    }
+    candidates.into_iter().find(|p| p.is_file())
+}
+
 fn expand_home(path: &str) -> String {
     let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"));
     match (path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")), home) {
@@ -409,6 +455,13 @@ mod tests {
         cmd.args(["-c", "echo 'Welcome banner'; exec sh"]);
         let mut s = Session::spawn(cmd).unwrap();
         assert_eq!(s.exec("echo clean", T).unwrap().stdout, "clean\n");
+    }
+
+    #[test]
+    fn local_shell_runs_commands() {
+        let mut s = Session::spawn(local_shell().unwrap()).unwrap();
+        let r = s.exec("echo local; command -v git >/dev/null && echo has-git", T).unwrap();
+        assert!(r.stdout.starts_with("local\n"), "{:?}", r.stdout);
     }
 
     #[test]

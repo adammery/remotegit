@@ -73,10 +73,10 @@
     --st-deleted: #ff7b72;
     --st-renamed: #79c0ff;
     --st-conflicted: #ffa657;
-    --diff-add-bg: #0f2119;
-    --diff-add-gutter: #132d1d;
-    --diff-del-bg: #251318;
-    --diff-del-gutter: #34181d;
+    --diff-add-bg: #113a1b;
+    --diff-add-gutter: #174f23;
+    --diff-del-bg: #450d10;
+    --diff-del-gutter: #5a1216;
     --diff-hunk-bg: #1c2533;
     --diff-hunk-text: #b1bac4;
     --shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
@@ -112,10 +112,10 @@
   --st-deleted: #ff7b72;
   --st-renamed: #79c0ff;
   --st-conflicted: #ffa657;
-  --diff-add-bg: #0f2119;
-  --diff-add-gutter: #132d1d;
-  --diff-del-bg: #251318;
-  --diff-del-gutter: #34181d;
+  --diff-add-bg: #113a1b;
+  --diff-add-gutter: #174f23;
+  --diff-del-bg: #450d10;
+  --diff-del-gutter: #5a1216;
   --diff-hunk-bg: #1c2533;
   --diff-hunk-text: #b1bac4;
   --shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
@@ -678,3 +678,5 @@ kbd { font: 12px var(--mono); padding: 1px 6px; border: 1px solid var(--border);
 .pop-foot .btn-block b { margin-left: 3px; }
 
 .settings-check { font-size: 12px; padding: 4px 0; }
+.settings-check.off { opacity: 0.5; }
+.field-stack { display: flex; flex-direction: column; gap: 12px; }

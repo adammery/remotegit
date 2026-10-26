@@ -1,0 +1,15 @@
+{
+  "name": "remotegit",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "preview": "node dev/preview.mjs",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

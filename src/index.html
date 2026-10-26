@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RemoteGit</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="toolbar">
+        <button class="tb-btn tb-repo" id="tb-repo" type="button">
+          <span class="tb-icon" data-icon="repo"></span>
+          <span class="tb-text">
+            <span class="tb-label">Current Repository</span>
+            <span class="tb-value" id="tb-repo-name">None</span>
+          </span>
+          <span class="tb-caret" data-icon="caret"></span>
+        </button>
+        <button class="tb-btn tb-branch" id="tb-branch" type="button">
+          <span class="tb-icon" data-icon="branch"></span>
+          <span class="tb-text">
+            <span class="tb-label">Current Branch</span>
+            <span class="tb-value" id="tb-branch-name">—</span>
+          </span>
+          <span class="tb-caret" data-icon="caret"></span>
+        </button>
+        <button class="tb-btn tb-sync" id="tb-sync" type="button">
+          <span class="tb-icon" id="sync-icon" data-icon="sync"></span>
+          <span class="tb-text">
+            <span class="tb-value" id="sync-title">Fetch origin</span>
+            <span class="tb-label" id="sync-sub">Never fetched</span>
+          </span>
+          <span class="sync-counts" id="sync-counts"></span>
+        </button>
+        <div class="tb-fill"></div>
+        <div class="conn" id="conn" hidden></div>
+      </header>
+
+      <div class="main">
+        <aside class="sidebar" id="sidebar">
+          <nav class="tabs" role="tablist">
+            <button class="tab active" data-tab="changes" type="button" role="tab">Changes <span class="tab-count" id="changes-count"></span></button>
+            <button class="tab" data-tab="history" type="button" role="tab">History</button>
+          </nav>
+
+          <section class="pane" id="changes-pane">
+            <div class="filter-row">
+              <span class="filter-icon" data-icon="search"></span>
+              <input id="filter" type="search" placeholder="Filter" spellcheck="false" autocomplete="off" />
+            </div>
+            <label class="files-header" id="files-header">
+              <input type="checkbox" id="check-all" />
+              <span id="files-count">0 changed files</span>
+            </label>
+            <div class="banner" id="state-banner" hidden></div>
+            <div class="file-list" id="file-list" tabindex="0"></div>
+            <div class="undo-bar" id="undo-bar" hidden></div>
+            <form class="commit-box" id="commit-form" autocomplete="off">
+              <div class="summary-row">
+                <span class="avatar" id="avatar"></span>
+                <input id="summary" placeholder="Summary (required)" spellcheck="true" />
+              </div>
+              <textarea id="description" placeholder="Description" spellcheck="true"></textarea>
+              <button class="btn btn-primary btn-block" id="commit-btn" type="submit" disabled>Commit to <b>main</b></button>
+            </form>
+          </section>
+
+          <section class="pane" id="history-pane" hidden>
+            <div class="commit-list" id="commit-list" tabindex="0"></div>
+          </section>
+        </aside>
+        <div class="resizer" id="resizer"></div>
+        <main class="content" id="content"></main>
+      </div>
+    </div>
+
+    <div id="popover-root"></div>
+    <div id="modal-root"></div>
+    <div id="toast-root" aria-live="polite"></div>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

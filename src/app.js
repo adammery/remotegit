@@ -398,6 +398,14 @@ async function loadCommitDiff() {
   renderContent();
 }
 
+function selectCommitFile(f) {
+  if (S.commitFile === f) return;
+  S.commitFile = f;
+  S.commitDiff = null;
+  renderContent();
+  loadCommitDiff();
+}
+
 // ============================================================ actions
 
 async function withBusy(label, fn) {
@@ -822,10 +830,18 @@ function renderContent() {
   const key = S.tab === 'history' ? `h:${S.selectedSha}:${S.commitFile?.path}` : `c:${S.selectedPath}`;
   const old = root.querySelector('.diff');
   const scroll = root.dataset.key === key && old ? [old.scrollTop, old.scrollLeft] : null;
+  // The commit's file list is rebuilt too; keep its focus and scroll so the arrow keys keep working.
+  const oldFiles = root.querySelector('#commit-files');
+  const filesSha = oldFiles?.dataset.sha;
+  const filesScroll = oldFiles?.scrollTop;
+  const filesFocused = !!oldFiles && document.activeElement === oldFiles;
   root.replaceChildren(...[contentView()].flat());
   root.dataset.key = key;
   const diff = root.querySelector('.diff');
   if (scroll && diff) [diff.scrollTop, diff.scrollLeft] = scroll;
+  const files = root.querySelector('#commit-files');
+  if (files && files.dataset.sha === filesSha) files.scrollTop = filesScroll;
+  if (files && filesFocused) files.focus({ preventScroll: true });
 }
 
 function contentView() {
@@ -1102,7 +1118,7 @@ function historyView() {
   );
   const files = h(
     'div',
-    { class: 'file-list', tabindex: '0' },
+    { class: 'file-list', id: 'commit-files', tabindex: '0', dataset: { sha: c.sha } },
     c.files.map((f) => {
       const [dir, name] = splitPath(f.path);
       return h(
@@ -1110,12 +1126,7 @@ function historyView() {
         {
           class: 'file-row' + (f === S.commitFile ? ' selected' : ''),
           title: f.orig ? `${f.orig} → ${f.path}` : f.path,
-          onclick: () => {
-            S.commitFile = f;
-            S.commitDiff = null;
-            renderContent();
-            loadCommitDiff();
-          },
+          onclick: () => selectCommitFile(f),
         },
         h('span', { class: 'file-path' }, h('span', { class: 'dir' }, ltr((f.orig ? f.orig + ' → ' : '') + dir)), h('span', { class: 'name' }, name)),
         h('span', { class: `file-status ${f.kind}`, html: fileIcon(f.kind) }),

@@ -437,6 +437,24 @@ export const checkoutPullRequest = (exec, repo, number) =>
 
 export const createBranch = (exec, repo, name) => run(exec, inRepo(repo, `${GIT} switch -q -c ${q(name)}`), 60);
 
+/** How many commits `branch` would bring into HEAD. */
+export async function mergeCount(exec, repo, branch) {
+  const out = await run(exec, inRepo(repo, `${GIT} rev-list --count HEAD..${q(branch)}`));
+  return Number(out.trim()) || 0;
+}
+
+/** Merges `branch` into the current branch; squash makes one commit of it. */
+export function mergeBranch(exec, repo, branch, { squash = false } = {}) {
+  const cmd = squash
+    ? `${GIT} merge --squash ${q(branch)} && ${GIT} commit -q --no-edit`
+    : `${GIT} merge --no-edit ${q(branch)}`;
+  return run(exec, inRepo(repo, cmd), 120).catch((e) => {
+    if (/CONFLICT|Automatic merge failed/.test(e.message))
+      throw new GitError('The merge has conflicts. Resolve the conflicted files, then commit to finish the merge.');
+    throw e;
+  });
+}
+
 // --------------------------------------------------------------- remote
 
 export const fetchRemote = (exec, repo, remote) =>

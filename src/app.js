@@ -1226,7 +1226,12 @@ function branchPopover(initialTab = 'branches') {
     const tabBtn = (id, label) => h('button', { class: 'pop-tab', type: 'button', dataset: { tab: id }, onclick: () => { tab = id; fill(); load(); } }, label);
     const tabs = h('div', { class: 'pop-tabs' }, tabBtn('branches', 'Branches'), tabBtn('prs', 'Pull Requests'));
     const body = h('div', { class: 'pop-body' });
-    el.append(tabs, h('div', { class: 'pop-head' }, filter, newBtn), body);
+    const mergeFoot = h(
+      'div',
+      { class: 'pop-foot' },
+      h('button', { class: 'btn btn-block', type: 'button', disabled: !current, onclick: () => { closePopover(); mergeModal(); } }, h('span', { html: icons.merge }), 'Choose a branch to merge into ', h('b', {}, current || 'HEAD')),
+    );
+    el.append(tabs, h('div', { class: 'pop-head' }, filter, newBtn), body, mergeFoot);
 
     const branchItem = (name, time, onclick) =>
       h(
@@ -1295,6 +1300,7 @@ function branchPopover(initialTab = 'branches') {
     const fill = () => {
       for (const b of tabs.children) b.classList.toggle('active', b.dataset.tab === tab);
       newBtn.hidden = tab !== 'branches';
+      mergeFoot.hidden = tab !== 'branches';
       body.replaceChildren(...(tab === 'branches' ? fillBranches() : fillPrs()));
     };
 
@@ -1320,6 +1326,82 @@ function branchPopover(initialTab = 'branches') {
     fill();
     load();
   }, 360);
+}
+
+function mergeModal() {
+  const target = S.status?.branch.head;
+  if (!target) return;
+  let branches = [];
+  let picked = null;
+  let squash = false;
+  let countGen = 0;
+  const filter = h('input', { type: 'search', placeholder: 'Filter branches', oninput: () => fill() });
+  const list = h('div', { class: 'browser merge-list' }, h('div', { class: 'pop-empty' }, 'Loading…'));
+  const info = h('div', { class: 'hint' }, 'Pick the branch to bring into ' + target + '.');
+  const mode = h('div', { class: 'segmented' });
+  const go = h('button', { class: 'btn btn-primary', type: 'button', disabled: true }, 'Merge');
+  const fillMode = () =>
+    mode.replaceChildren(
+      ...[[false, 'Create a merge commit'], [true, 'Squash and merge']].map(([v, label]) =>
+        h('button', { type: 'button', class: v === squash ? 'active' : '', onclick: () => { squash = v; fillMode(); updateGo(); } }, label),
+      ),
+    );
+  const updateGo = (count) => {
+    go.disabled = !picked || count === 0;
+    go.replaceChildren(picked ? `${squash ? 'Squash and merge' : 'Merge'} ${picked} into ${target}` : 'Merge');
+  };
+  const pick = async (name) => {
+    picked = name;
+    fill();
+    updateGo();
+    info.textContent = 'Checking…';
+    const gen = ++countGen;
+    try {
+      const n = await git.mergeCount(ex, S.repo.path, name);
+      if (gen !== countGen) return;
+      info.textContent = n ? `This will merge ${n} commit${n === 1 ? '' : 's'} from ${name} into ${target}.` : `${target} is already up to date with ${name}.`;
+      updateGo(n);
+    } catch (e) {
+      info.textContent = e.message;
+    }
+  };
+  const fill = () => {
+    const term = filter.value.toLowerCase();
+    const shown = branches.filter((b) => b.toLowerCase().includes(term));
+    list.replaceChildren(
+      ...(shown.length
+        ? shown.map((b) =>
+            h('div', { class: 'browser-row' + (b === picked ? ' picked' : ''), onclick: () => pick(b) }, h('span', { html: b === picked ? icons.check : icons.branch }), h('span', { class: 'grow' }, b)),
+          )
+        : [h('div', { class: 'pop-empty' }, branches.length ? 'No branches match.' : 'No other branches.')]),
+    );
+  };
+  let close;
+  go.addEventListener('click', () => {
+    close();
+    withBusy(squash ? 'Squash and merge' : 'Merge', async () => {
+      await git.mergeBranch(ex, S.repo.path, picked, { squash });
+      S.history.oid = undefined;
+    });
+  });
+  fillMode();
+  close = openModal({
+    title: `Merge into ${target}`,
+    wide: true,
+    body: [filter, list, mode, info],
+    foot: (c) => [h('button', { class: 'btn', type: 'button', onclick: c }, 'Cancel'), go],
+  });
+  git.getBranches(ex, S.repo.path).then(
+    (b) => {
+      const localNames = new Set(b.local.map((x) => x.name));
+      branches = [
+        ...b.local.map((x) => x.name).filter((n) => n !== target),
+        ...b.remote.map((x) => x.name).filter((n) => !localNames.has(n.slice(n.indexOf('/') + 1)) || n.slice(n.indexOf('/') + 1) === target),
+      ];
+      fill();
+    },
+    (e) => list.replaceChildren(h('div', { class: 'pop-empty' }, h('div', { class: 'error-box' }, e.message))),
+  );
 }
 
 function switchBranch(name, remote) {

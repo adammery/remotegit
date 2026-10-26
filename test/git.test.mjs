@@ -336,6 +336,34 @@ test('partial commits: only the selected lines go in', async () => {
   assert.match(sh(dir, 'git show HEAD:a.txt'), /line 28\nline 29\nline 29b\nline 30\n$/);
 });
 
+test('merge and squash-merge a branch', async () => {
+  const dir = newRepo();
+  writeFileSync(join(dir, 'f.txt'), 'base\n');
+  sh(dir, 'git add -A && git commit -qm base && git switch -q -c feature');
+  writeFileSync(join(dir, 'a.txt'), 'a\n');
+  sh(dir, 'git add -A && git commit -qm "add a"');
+  writeFileSync(join(dir, 'b.txt'), 'b\n');
+  sh(dir, 'git add -A && git commit -qm "add b" && git switch -q main');
+  writeFileSync(join(dir, 'm.txt'), 'main side\n');
+  sh(dir, 'git add -A && git commit -qm "main side"');
+
+  assert.equal(await git.mergeCount(exec, dir, 'feature'), 2);
+  sh(dir, 'git branch squash-copy main');
+  await git.mergeBranch(exec, dir, 'feature');
+  assert.equal(sh(dir, 'git rev-list --count --merges HEAD').trim(), '1');
+  assert.equal(await git.mergeCount(exec, dir, 'feature'), 0);
+
+  sh(dir, 'git switch -q squash-copy');
+  await git.mergeBranch(exec, dir, 'feature', { squash: true });
+  assert.equal(sh(dir, 'git rev-list --count --merges HEAD').trim(), '0');
+  assert.ok(existsSync(join(dir, 'a.txt')) && existsSync(join(dir, 'b.txt')));
+
+  // Conflicts come back as a readable error and leave the merge in progress.
+  sh(dir, 'git switch -q -c c1 main && echo one > f.txt && git commit -qam one && git switch -q -c c2 HEAD~1 && echo two > f.txt && git commit -qam two');
+  await assert.rejects(git.mergeBranch(exec, dir, 'c1'), /conflicts/);
+  assert.ok((await git.getStatus(exec, dir)).state.includes('MERGE_HEAD'));
+});
+
 test('ignorePath appends with a newline guard', async () => {
   const dir = newRepo();
   writeFileSync(join(dir, '.gitignore'), 'node_modules');

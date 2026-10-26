@@ -240,8 +240,8 @@ input[type="checkbox"] {
   appearance: none;
   -webkit-appearance: none;
   flex: none;
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   margin: 0;
   border: 1.5px solid var(--checkbox-border);
   border-radius: 4px;
@@ -251,7 +251,7 @@ input[type="checkbox"] {
 }
 input[type="checkbox"]::after {
   content: '';
-  width: 8px;
+  width: 7px;
   height: 4px;
   border-left: 2px solid #fff;
   border-bottom: 2px solid #fff;
@@ -290,7 +290,7 @@ input[type="checkbox"]:focus-visible { box-shadow: 0 0 0 3px rgba(68, 147, 248, 
   display: flex;
   align-items: center;
   gap: 9px;
-  height: 32px;
+  height: 31px;
   padding: 0 10px;
   border-bottom: 1px solid var(--row-border);
 }
@@ -670,3 +670,7 @@ kbd { font: 12px var(--mono); padding: 1px 6px; border: 1px solid var(--border);
 .diff-table.selectable .dl[data-i]:not(.sel) .selcol { background: transparent; }
 .diff-table.selectable .dl[data-i]:not(.sel) { opacity: 0.75; }
 .diff-table.selectable .dl.hunk:hover { filter: brightness(1.15); }
+
+.merge-list { height: 260px; }
+.browser-row.picked { background: var(--selected); font-weight: 600; }
+.pop-foot .btn-block b { margin-left: 3px; }

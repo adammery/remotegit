@@ -1,11 +1,11 @@
 :root {
   color-scheme: light;
-  --toolbar-bg: #24292e;
-  --toolbar-hover: #2f363d;
-  --toolbar-active: #1b1f23;
-  --toolbar-border: #141414;
-  --toolbar-text: #ffffff;
-  --toolbar-muted: #959da5;
+  --toolbar-bg: #f6f8fa;
+  --toolbar-hover: #eaeef2;
+  --toolbar-active: #ffffff;
+  --toolbar-border: #d1d9e0;
+  --toolbar-text: #1f2328;
+  --toolbar-muted: #59636e;
   --bg: #ffffff;
   --sidebar-bg: #ffffff;
   --panel: #f6f8fa;

@@ -3,28 +3,67 @@
 A GitHub Desktop-style Git client for repositories that live **on a server**. It connects over SSH, so the code stays on the server while you see changes, diffs, history and branches, and commit, push and pull from your Mac or Windows PC.
 
 ![Changes](docs/screenshot.png)
-![History](docs/history.png)
 
 ## How it works
 
 - Uses the SSH client already on your system (`ssh` on macOS, OpenSSH on Windows 10/11), so your keys, ssh-agent and `~/.ssh/config` just work.
 - Keeps **one persistent SSH connection** per server and sends every git command through it, so a refresh is one quick command, not a new login.
-- Nothing to install on the server besides `git` and `sh`.
-- While the window is visible, status refreshes every 3 s. Changes made elsewhere on the server (VS Code, vim, …) show up on their own. When the window is hidden, the app does nothing.
+- Nothing to install on the server besides `git` and `sh`. Optional extras on the server: the GitHub CLI (`gh`) for pull requests, and Claude Code (`claude`) for AI commit messages.
+- While the window is visible, status refreshes every few seconds. Changes made elsewhere on the server (VS Code, vim, an AI agent, …) show up on their own. When the window is hidden, the app does nothing.
 - Built with Tauri, so the installer is a few MB and memory use is low.
 
 ## Features
 
-- **Changes:** changed files with checkboxes, a diff with line numbers, and a commit of only the checked files (summary + description) with **Undo**.
-- **History:** list of commits (unpushed ones have an ↑ arrow), commit details, changed files and diff.
-- **Branches:** switch, create, and check out remote branches.
-- **Fetch / Pull / Push / Publish branch** in one button, like GitHub Desktop. Right-click the button to pick a specific action.
-- Right-click a file to discard changes, add it to `.gitignore`, or copy its path.
-- Multiple servers and repositories. Repositories can be found on the server automatically (in `~`, `/var/www`, `/srv`).
-- "Open in VS Code" opens the repo through Remote-SSH. "Copy SSH command" copies a command that opens a terminal in the repo folder.
-- Light and dark mode, following the system.
+**Changes**
+- Changed files with checkboxes and a diff with line numbers.
+- **Commit only some lines**: click the gutter (or drag over it) to choose lines, or click a `@@` header for the whole block.
+- Summary, description, **co-authors** (`@login` or `Name <email>`), and options to bypass hooks, add a Signed-off-by trailer or allow an empty commit.
+- **AI commit message**: the ✨ button asks Claude Code on the server to describe the selected changes in the style of your recent commits. No API key in the app.
+- **Undo** the last commit. Right-click a file to discard it, add it to `.gitignore`, or copy its path.
 
-Shortcuts: `⌘/Ctrl+Enter` commit · `⌘/Ctrl+1` / `2` Changes / History · `⌘/Ctrl+T` repository picker · `⌘/Ctrl+B` branches · `⌘/Ctrl+R` refresh · ↑/↓ arrows in lists.
+![Commit only some lines](docs/lines.png)
+
+**History**
+- Commits with author pictures, tags and an ↑ badge on unpushed ones; commit details, changed files and diff.
+- Right-click a commit: Amend, Reset to commit, Checkout, Revert, Create branch, Create tag, Cherry-pick, Copy SHA or tag, View on GitHub.
+
+![History](docs/history.png)
+
+**Branches and remotes**
+- Branch list with Default, Recent and Other branches, plus remote branches; create a new branch.
+- **Pull Requests** tab: open PRs from the GitHub CLI on the server; click one to check it out.
+- **Fetch / Pull / Push / Publish branch** in one button with the ahead/behind counts; the ▾ next to it picks a specific action.
+
+![Branches](docs/branches.png)
+
+**Servers and repositories**
+- Several servers; the **Server** menu filters the repository list to one server or shows all.
+- **Test connection** checks SSH, git, the GitHub CLI and Claude Code on the server.
+- Add repositories by scanning the server (`~`, `/var/www`, `/srv`), by path, or with a **folder browser** that walks the server's folders.
+- Pick your SSH key with a file dialog. "Open in VS Code" opens the repo through Remote-SSH; "Copy SSH command" gives you a terminal in the repo folder.
+
+**Look**
+- Two styles: **GitHub** (familiar blue) and **RemoteGit** (coral), each in light and dark, following the system or set by hand (⚙ in the top right).
+
+![RemoteGit style, light](docs/style-remotegit-light.png)
+
+### Keyboard shortcuts
+
+`⌘` on macOS, `Ctrl` on Windows. Press `⌘/` in the app for the full list.
+
+| Shortcut | Action |
+|---|---|
+| `⌘1` / `⌘2` | Changes / History |
+| `⌘T` / `⌘B` / `⌘⇧L` | Switch repository / branch / server |
+| `⌘⇧N` | New branch |
+| `⌘P` / `⌘⇧P` / `⌘⇧T` | Push / Pull / Fetch |
+| `⌘↩` | Commit |
+| `⌘⇧M` | Generate the commit message with AI |
+| `⌘⇧A` / `⌘⇧G` | Open in VS Code / on GitHub |
+| `⌘⇧⌫` | Discard all changes |
+| `⌘R` | Refresh |
+| `⌘,` | Settings |
+| `Space` | Check or uncheck the selected file |
 
 ## Connection requirements
 
@@ -98,7 +137,7 @@ Layout:
 
 ## Not supported yet
 
-Password login (keys only), resolving merge conflicts inside the app (conflicts are shown; resolve them in an editor, then commit), stash, image diffs, signing commits with a passphrase-protected key.
+Password login (keys only), resolving merge conflicts inside the app (conflicts are shown; resolve them in an editor, then commit), stash, reordering commits, syntax highlighting in diffs, image diffs, signing commits with a passphrase-protected key.
 
 ## Credits
 

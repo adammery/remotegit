@@ -212,7 +212,7 @@ export function parseDiff(text) {
 
 // -------------------------------------------------------------- history
 
-const LOG_FORMAT = '%H%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%P%x1e';
+const LOG_FORMAT = '%H%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%P%x1f%D%x1e';
 
 export async function getLog(exec, repo, { skip = 0, limit = 100 } = {}) {
   const r = await exec(
@@ -236,8 +236,9 @@ true`,
     .map((s) => s.replace(/^\n/, ''))
     .filter(Boolean)
     .map((rec) => {
-      const [sha, short, author, email, time, summary, parents] = rec.split('\x1f');
-      return { sha, short, author, email, time: Number(time), summary, parents: parents ? parents.split(' ') : [] };
+      const [sha, short, author, email, time, summary, parents, refs = ''] = rec.split('\x1f');
+      const tags = refs.split(', ').filter((r) => r.startsWith('tag: ')).map((r) => r.slice(5));
+      return { sha, short, author, email, time: Number(time), summary, parents: parents ? parents.split(' ') : [], tags };
     });
   return { commits, unpushed: new Set(unpushed.split('\n').filter(Boolean)) };
 }
@@ -291,18 +292,35 @@ export async function getBranches(exec, repo) {
     exec,
     inRepo(
       repo,
-      `${GIT} for-each-ref --sort=-committerdate --format='%(refname)%1f%(refname:short)%1f%(committerdate:unix)%1f%(upstream:short)' refs/heads refs/remotes`,
+      `${GIT} for-each-ref --sort=-committerdate --format='%(refname)%1f%(refname:short)%1f%(committerdate:unix)%1f%(upstream:short)' refs/heads refs/remotes || exit $?
+${PRINT_SEP}
+${GIT} symbolic-ref -q --short refs/remotes/origin/HEAD
+${PRINT_SEP}
+${GIT} reflog --format=%gs -n 300 2>/dev/null
+true`,
     ),
   );
+  const [refs, originHead = '', reflog = ''] = out.split(SEP);
   const local = [];
   const remote = [];
-  for (const line of out.split('\n')) {
+  for (const line of refs.split('\n')) {
     if (!line) continue;
     const [ref, name, time, upstream] = line.split('\x1f');
     if (ref.startsWith('refs/heads/')) local.push({ name, time: Number(time), upstream });
     else if (!ref.endsWith('/HEAD')) remote.push({ name, time: Number(time) });
   }
-  return { local, remote };
+  const localNames = new Set(local.map((b) => b.name));
+  const fromOrigin = originHead.trim().replace(/^[^/]+\//, '');
+  const defaultBranch = fromOrigin || ['main', 'master'].find((n) => localNames.has(n)) || null;
+
+  // Branches most recently switched to, like GitHub Desktop's "Recent Branches".
+  const recent = [];
+  for (const line of reflog.split('\n')) {
+    const m = /^checkout: moving from .+ to (.+)$/.exec(line);
+    if (m && localNames.has(m[1]) && !recent.includes(m[1])) recent.push(m[1]);
+    if (recent.length === 5) break;
+  }
+  return { local, remote, defaultBranch, recent };
 }
 
 export const checkoutBranch = (exec, repo, name) => run(exec, inRepo(repo, `${GIT} switch -q ${q(name)}`), 60);
@@ -320,6 +338,23 @@ else ${GIT} switch -q -c ${q(local)} --track ${q(remoteName)}; fi`,
     60,
   );
 }
+
+/** Open PRs via the GitHub CLI on the server; null when `gh` isn't installed. */
+export async function getPullRequests(exec, repo) {
+  const r = await exec(
+    inRepo(
+      repo,
+      `command -v gh >/dev/null 2>&1 || exit 127
+GH_PROMPT_DISABLED=1 NO_COLOR=1 gh pr list --state open --limit 100 --json number,title,headRefName,author,updatedAt,isDraft,url`,
+    ),
+    60,
+  );
+  if (r.code === 127) return null;
+  return JSON.parse(must(r) || '[]');
+}
+
+export const checkoutPullRequest = (exec, repo, number) =>
+  run(exec, inRepo(repo, `GH_PROMPT_DISABLED=1 gh pr checkout ${Number(number)}`), NET_TIMEOUT);
 
 export const createBranch = (exec, repo, name) => run(exec, inRepo(repo, `${GIT} switch -q -c ${q(name)}`), 60);
 
@@ -340,8 +375,33 @@ else ${GIT} pull --no-edit --no-rebase; fi`,
     NET_TIMEOUT,
   );
 
+// --follow-tags sends the annotated tags created with createTag().
 export const push = (exec, repo, { remote, hasUpstream }) =>
-  run(exec, inRepo(repo, hasUpstream ? `${GIT} push` : `${GIT} push -u ${q(remote)} HEAD`), NET_TIMEOUT);
+  run(
+    exec,
+    inRepo(repo, hasUpstream ? `${GIT} push --follow-tags` : `${GIT} push --follow-tags -u ${q(remote)} HEAD`),
+    NET_TIMEOUT,
+  );
+
+// ------------------------------------------------------ commit actions
+
+/** Moves the branch to `sha`, keeping later changes as uncommitted edits. */
+export const resetToCommit = (exec, repo, sha) => run(exec, inRepo(repo, `${GIT} reset -q ${q(sha)}`), 60);
+
+export const checkoutCommit = (exec, repo, sha) => run(exec, inRepo(repo, `${GIT} switch -q --detach ${q(sha)}`), 60);
+
+export const revertCommit = (exec, repo, sha, isMerge) =>
+  run(exec, inRepo(repo, `${GIT} revert --no-edit ${isMerge ? '-m 1 ' : ''}${q(sha)}`), 120);
+
+export const createBranchAt = (exec, repo, name, sha) =>
+  run(exec, inRepo(repo, `${GIT} switch -q -c ${q(name)} ${q(sha)}`), 60);
+
+export const createTag = (exec, repo, name, sha) =>
+  run(exec, inRepo(repo, `${GIT} tag -a ${q(name)} -m ${q(name)} ${q(sha)}`));
+
+/** Applies `sha` on top of `branch`, which is checked out first. */
+export const cherryPick = (exec, repo, sha, branch) =>
+  run(exec, inRepo(repo, `${GIT} switch -q ${q(branch)} && ${GIT} cherry-pick ${q(sha)}`), 120);
 
 // -------------------------------------------------------------- changes
 
@@ -349,24 +409,104 @@ export const push = (exec, repo, { remote, hasUpstream }) =>
  * Commits exactly the checked files, ignoring whatever was staged before —
  * the same model GitHub Desktop uses.
  */
-export async function commit(exec, repo, { files, all, summary, description = '' }) {
+export async function commit(
+  exec,
+  repo,
+  { files, all, summary, description = '', coAuthors = [], noVerify = false, signoff = false, allowEmpty = false },
+) {
   const desc = description.trim();
-  const message = `${summary.trim()}\n${desc ? `\n${desc}\n` : ''}`;
+  const trailers = coAuthors.map((a) => `Co-authored-by: ${a}`).join('\n');
+  const message = [summary.trim(), desc, trailers].filter(Boolean).join('\n\n') + '\n';
   const paths = files.flatMap((f) => (f.orig ? [f.orig, f.path] : [f.path])).map(q);
+  const flags = [noVerify && '--no-verify', signoff && '--signoff', allowEmpty && '--allow-empty'].filter(Boolean).join(' ');
   const out = await run(
     exec,
     inRepo(
       repo,
       [
         `${GIT} reset -q`,
-        all ? `${GIT} add -A` : `${GIT} add -A -- ${paths.join(' ')}`,
-        `printf '%s' ${q(message)} | ${GIT} commit -q -F -`,
+        all ? `${GIT} add -A` : paths.length ? `${GIT} add -A -- ${paths.join(' ')}` : 'true',
+        `printf '%s' ${q(message)} | ${GIT} commit -q ${flags} -F -`,
         `${GIT} rev-parse HEAD`,
       ].join(' &&\n'),
     ),
     120,
   );
   return out.trim();
+}
+
+/** "Name <mail>" stays; "@login" becomes GitHub's noreply address for it. */
+export function parseCoAuthors(text) {
+  return text
+    .split(/[,\n]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => {
+      const login = /^@([A-Za-z0-9-]+)$/.exec(s);
+      if (login) return `${login[1]} <${login[1]}@users.noreply.github.com>`;
+      return /^.+ <[^<>\s]+@[^<>\s]+>$/.test(s) ? s : null;
+    });
+}
+
+/**
+ * Asks Claude Code on the server for a commit message for `files`, in the
+ * style of the recent history. Returns null when `claude` isn't installed.
+ */
+export async function generateCommitMessage(exec, repo, files, hasHead) {
+  const tracked = files.filter((f) => hasHead && f.xy !== '??');
+  const untracked = files.filter((f) => !hasHead || f.xy === '??').slice(0, 30);
+  const diffs = [
+    tracked.length &&
+      `${GIT} diff HEAD --no-color --no-ext-diff -M -- ${tracked.flatMap((f) => (f.orig ? [f.orig, f.path] : [f.path])).map(q).join(' ')}`,
+    ...untracked.map((f) => `${GIT} diff --no-index --no-color --no-ext-diff -- /dev/null ${q(f.path)}`),
+  ].filter(Boolean);
+  const intro =
+    'Write a git commit message for the diff on stdin. Match the style (language, casing, prefixes) of these recent commit subjects:';
+  const outro =
+    'Reply with only the message: a summary line under 72 characters, then optionally a blank line and a short body. No quotes, no code fences.';
+  const r = await exec(
+    inRepo(
+      repo,
+      `PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.claude/local:/usr/local/bin:$PATH"
+command -v claude >/dev/null 2>&1 || exit 127
+recent=$(${GIT} log -n 15 --format=%s 2>/dev/null)
+prompt=$(printf '%s\n%s\n\n%s' ${q(intro)} "$recent" ${q(outro)})
+{ ${diffs.map((d) => `${d};`).join(' ') || 'true;'} } | head -c 120000 | claude -p "$prompt"`,
+    ),
+    180,
+  );
+  if (r.code === 127) return null;
+  const text = must(r)
+    .trim()
+    .replace(/^```\w*\n?|\n?```$/g, '')
+    .trim();
+  const [summary, ...rest] = text.split('\n');
+  return { summary: summary.trim(), description: rest.join('\n').trim() };
+}
+
+/** Folders in `path` on the server, for the in-app folder browser. */
+export async function listDir(exec, path) {
+  const out = await run(
+    exec,
+    `cd ${qpath(path || '~')} || exit 1
+pwd
+for d in */; do
+  [ -d "$d" ] || continue
+  d=\${d%/}
+  if [ -e "$d/.git" ]; then echo "git	$d"; else echo "dir	$d"; fi
+done
+[ -e .git ] && echo "self	git"
+true`,
+  );
+  const [cwd, ...lines] = out.split('\n');
+  const dirs = [];
+  let isRepo = false;
+  for (const line of lines) {
+    const [kind, name] = line.split('\t');
+    if (kind === 'self') isRepo = true;
+    else if (name) dirs.push({ name, isRepo: kind === 'git' });
+  }
+  return { path: cwd, dirs, isRepo };
 }
 
 /** Undoes `sha` (keeping its changes) only if it is still the tip. */

@@ -118,6 +118,7 @@ fn ssh_disconnect(state: State<'_, Conns>, id: String) {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(Conns::default())
         .invoke_handler(tauri::generate_handler![ssh_connect, ssh_exec, ssh_disconnect])
         .run(tauri::generate_context!())

@@ -7,7 +7,16 @@ const tauri = window.__TAURI__;
 
 const STORE_KEY = 'remotegit:v1';
 const store = Object.assign(
-  { servers: [], repos: [], currentRepoId: null, sidebarWidth: 300, pollSeconds: 3, recentBranches: {} },
+  {
+    servers: [],
+    repos: [],
+    currentRepoId: null,
+    serverFilter: null,
+    sidebarWidth: 300,
+    pollSeconds: 3,
+    theme: 'system',
+    commitOpts: { noVerify: false, signoff: false, allowEmpty: false },
+  },
   readStore(),
 );
 
@@ -23,6 +32,7 @@ function save() {
     localStorage.setItem(STORE_KEY, JSON.stringify(store));
   } catch {}
 }
+if (!store.servers.some((s) => s.id === store.serverFilter)) store.serverFilter = null;
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
 // ============================================================ DOM helpers
@@ -59,11 +69,21 @@ function ago(sec) {
   return `${n} ${name}${n > 1 ? 's' : ''} ago`;
 }
 
-function avatar(name, small) {
+// Same lookup GitHub Desktop uses: the picture of the account that owns the email.
+function avatarUrl(email) {
+  if (!email) return null;
+  const noreply = /^(\d+)\+[^@]+@users\.noreply\.github\.com$/i.exec(email);
+  if (noreply) return `https://avatars.githubusercontent.com/u/${noreply[1]}?s=64`;
+  return `https://avatars.githubusercontent.com/u/e?email=${encodeURIComponent(email)}&s=64`;
+}
+
+function avatar(name, small, email) {
   const initials = (name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
   let hash = 0;
   for (const c of name || '') hash = (hash * 31 + c.charCodeAt(0)) | 0;
-  return h('span', { class: 'avatar' + (small ? ' small' : ''), style: `background:hsl(${Math.abs(hash) % 360} 45% 42%)`, title: name || '' }, initials);
+  const url = avatarUrl(email);
+  const img = url && h('img', { src: url, alt: '', loading: 'lazy', draggable: false, onerror: (e) => e.target.remove() });
+  return h('span', { class: 'avatar' + (small ? ' small' : ''), style: `background:hsl(${Math.abs(hash) % 360} 45% 42%)`, title: email ? `${name} <${email}>` : name || '' }, initials, img);
 }
 
 const splitPath = (p) => {
@@ -191,6 +211,7 @@ function selectRepo(repoId) {
     commitDiff: null,
   });
   if (repo && !S.server) S.repo = null;
+  if (S.repo && store.serverFilter && S.repo.serverId !== store.serverFilter) store.serverFilter = S.repo.serverId;
   store.currentRepoId = S.repo?.id || null;
   save();
   $('#summary').value = '';
@@ -385,20 +406,83 @@ async function doCommit(ev) {
   ev?.preventDefault();
   const summary = $('#summary').value.trim();
   const files = checkedFiles();
-  if (!summary || !files.length || S.busy || !S.repo) return;
+  const opts = store.commitOpts;
+  if (!summary || (!files.length && !opts.allowEmpty) || S.busy || !S.repo) return;
+  const coAuthors = $('#coauthors').hidden ? [] : git.parseCoAuthors($('#coauthors').value);
+  if (coAuthors.includes(null))
+    return toast('Write co-authors as @github-login or Name <email>, separated by commas.', 'error', 'Invalid co-author');
   await withBusy('Commit', async () => {
     const sha = await git.commit(ex, S.repo.path, {
       files,
-      all: files.length === currentFiles().length,
+      all: files.length > 0 && files.length === currentFiles().length,
       summary,
       description: $('#description').value,
+      coAuthors,
+      ...opts,
     });
     S.lastCommit = { sha, summary, repoId: S.repo.id };
     $('#summary').value = '';
     $('#description').value = '';
+    $('#coauthors').value = '';
+    $('#coauthors').hidden = true;
     S.excluded.clear();
     S.history.oid = undefined;
   });
+}
+
+function commitOptionsMenu(e) {
+  const r = e.currentTarget.getBoundingClientRect();
+  const o = store.commitOpts;
+  const toggle = (key) => () => {
+    o[key] = !o[key];
+    save();
+    renderCommitFlags();
+    updateCommitButton();
+  };
+  openMenu(r.left, r.bottom + 4, [
+    { label: (o.noVerify ? '✓ ' : '') + 'Bypass Commit Hooks', run: toggle('noVerify') },
+    { label: (o.signoff ? '✓ ' : '') + 'Add Signed-off-by Trailer', run: toggle('signoff') },
+    { label: (o.allowEmpty ? '✓ ' : '') + 'Allow Empty Commit', run: toggle('allowEmpty') },
+  ]);
+}
+
+function renderCommitFlags() {
+  const o = store.commitOpts;
+  const flags = [o.noVerify && 'no hooks', o.signoff && 'signed-off', o.allowEmpty && 'empty ok'].filter(Boolean);
+  $('#commit-flags').replaceChildren(...flags.map((f) => h('span', { class: 'tag-badge' }, f)));
+  $('#commit-opts-btn').classList.toggle('on', flags.length > 0);
+}
+
+function toggleCoAuthors() {
+  const input = $('#coauthors');
+  input.hidden = !input.hidden;
+  $('#coauthor-btn').classList.toggle('on', !input.hidden);
+  if (!input.hidden) input.focus();
+}
+
+async function generateMessage() {
+  const files = checkedFiles();
+  if (!S.repo || !files.length) return toast('Check the files the message should describe.', 'info', 'Nothing selected');
+  const btn = $('#ai-btn');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  btn.innerHTML = icons.spinner;
+  try {
+    const m = await git.generateCommitMessage(ex, S.repo.path, files, hasHead());
+    if (!m) {
+      toast('Install Claude Code on the server and sign in there once (run `claude`). RemoteGit uses it to write the message.', 'error', 'Claude Code not found on the server');
+    } else {
+      $('#summary').value = m.summary;
+      $('#description').value = m.description;
+      updateCommitButton();
+      $('#summary').focus();
+    }
+  } catch (e) {
+    toast(e.message, 'error', 'Could not generate a message');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = icons.sparkle;
+  }
 }
 
 async function undoLastCommit() {
@@ -452,19 +536,19 @@ function renderAll() {
   renderConn();
 }
 
+const dotClass = (serverId) => ({ ok: 'ok', connecting: 'busy', error: 'err' }[connState.get(serverId)] || '');
+const filterServer = () => store.servers.find((s) => s.id === store.serverFilter) || null;
+
 function renderConn() {
-  const el = $('#conn');
-  if (!S.server) {
-    el.hidden = true;
-    return;
-  }
-  const state = connState.get(S.server.id);
-  el.hidden = false;
-  el.replaceChildren(
-    h('span', { class: 'dot ' + ({ ok: 'ok', connecting: 'busy', error: 'err' }[state] || '') }),
-    S.server.name || S.server.host,
-  );
-  el.title = { ok: 'Connected', connecting: 'Connecting…', error: 'Not connected' }[state] || '';
+  const shown = filterServer();
+  const server = shown || S.server;
+  $('#tb-server-name').textContent = shown ? shown.name || shown.host : 'All servers';
+  const dot = $('#server-dot');
+  dot.hidden = !server;
+  if (!server) return;
+  dot.className = 'dot ' + dotClass(server.id);
+  const state = { ok: 'connected', connecting: 'connecting…', error: 'not connected' }[connState.get(server.id)] || 'idle';
+  $('#tb-server').title = `${server.name || server.host}: ${state}`;
 }
 
 function renderToolbar() {
@@ -550,7 +634,7 @@ function renderChanges() {
   list.replaceChildren(...rows);
 
   updateCommitButton();
-  $('#avatar').replaceWith(Object.assign(avatar(S.status?.user.name), { id: 'avatar' }));
+  $('#avatar').replaceWith(Object.assign(avatar(S.status?.user.name, false, S.status?.user.email), { id: 'avatar' }));
 
   const undo = $('#undo-bar');
   const lc = S.lastCommit;
@@ -568,7 +652,7 @@ function updateCommitButton() {
   const btn = $('#commit-btn');
   const branch = S.status?.branch.head || 'HEAD';
   btn.replaceChildren(S.busy === 'Commit' ? 'Committing…' : 'Commit to ', S.busy === 'Commit' ? '' : h('b', {}, branch));
-  btn.disabled = !S.status || !checkedFiles().length || !$('#summary').value.trim() || !!S.busy;
+  btn.disabled = !S.status || (!checkedFiles().length && !store.commitOpts.allowEmpty) || !$('#summary').value.trim() || !!S.busy;
 }
 
 // Keeps punctuation in place inside left-truncating (rtl) path labels.
@@ -637,19 +721,13 @@ function renderHistory() {
         class: 'commit-row' + (c.sha === S.selectedSha ? ' selected' : ''),
         dataset: { sha: c.sha },
         onclick: () => selectCommit(c.sha),
-        oncontextmenu: (e) => {
-          e.preventDefault();
-          openMenu(e.clientX, e.clientY, [
-            { label: 'Copy SHA', run: () => copyText(c.sha) },
-            { label: 'Copy summary', run: () => copyText(c.summary) },
-          ]);
-        },
+        oncontextmenu: (e) => commitMenu(e, c),
       },
       h(
         'div',
         { class: 'grow' },
         h('div', { class: 'commit-summary', title: c.summary }, c.summary),
-        h('div', { class: 'commit-meta' }, avatar(c.author, true), `${c.author} • ${ago(c.time)}`),
+        h('div', { class: 'commit-meta' }, avatar(c.author, true, c.email), `${c.author} • ${ago(c.time)}`, c.tags.map((t) => h('span', { class: 'tag-badge' }, t))),
       ),
       H.unpushed.has(c.sha) && h('span', { class: 'unpushed', title: 'Not pushed yet', html: icons.up }),
     ),
@@ -796,7 +874,7 @@ function historyView() {
     h(
       'div',
       { class: 'meta' },
-      h('span', {}, avatar(c.author, true), c.author),
+      h('span', {}, avatar(c.author, true, c.email), c.author),
       h('span', { class: 'sha', title: 'Click to copy', style: 'cursor:pointer', onclick: () => copyText(c.sha) }, h('span', { html: icons.commit }), c.sha.slice(0, 7)),
       h('span', { title: new Date(c.time * 1000).toLocaleString() }, ago(c.time)),
       h('span', {}, `${c.files.length} changed file${c.files.length === 1 ? '' : 's'}`),
@@ -844,7 +922,9 @@ function openPopover(anchor, build, width) {
   closePopover();
   if (same) return;
   const r = anchor.getBoundingClientRect();
-  const el = h('div', { class: 'popover', style: `left:${r.left}px;top:${r.bottom}px;width:${width || r.width}px` });
+  const w = width || r.width;
+  const left = Math.max(0, Math.min(r.left, innerWidth - w));
+  const el = h('div', { class: 'popover', style: `left:${left}px;top:${r.bottom}px;width:${w}px` });
   popover = { el, anchor };
   anchor.classList.add('open');
   $('#popover-root').append(el);
@@ -863,16 +943,16 @@ function repoPopover() {
     const body = h('div', { class: 'pop-body' });
     const fill = () => {
       const term = filter.value.toLowerCase();
-      const groups = store.servers.map((s) => {
+      const shown = filterServer();
+      const groups = (shown ? [shown] : store.servers).map((s) => {
         const repos = store.repos.filter((r) => r.serverId === s.id && (r.name + r.path).toLowerCase().includes(term));
         return [
           h(
             'div',
             { class: 'pop-group' },
-            h('span', { class: 'dot ' + ({ ok: 'ok', connecting: 'busy', error: 'err' }[connState.get(s.id)] || '') }),
+            h('span', { class: 'dot ' + dotClass(s.id) }),
             h('span', { class: 'grow', title: s.host }, s.name || s.host),
             h('button', { class: 'btn-icon', type: 'button', title: 'Add repository from this server', html: icons.plus, onclick: () => { closePopover(); addRepoModal(s); } }),
-            h('button', { class: 'btn-icon', type: 'button', title: 'Server settings', html: icons.gear, onclick: () => { closePopover(); serverModal(s); } }),
           ),
           repos.length
             ? repos.map((r) =>
@@ -896,46 +976,235 @@ function repoPopover() {
       h(
         'div',
         { class: 'pop-foot' },
-        h('button', { class: 'btn btn-primary', type: 'button', disabled: !store.servers.length, onclick: () => { closePopover(); addRepoModal(); } }, h('span', { html: icons.plus }), 'Add repository'),
-        h('button', { class: 'btn', type: 'button', onclick: () => { closePopover(); serverModal(); } }, h('span', { html: icons.server }), 'Add server'),
+        store.servers.length
+          ? h('button', { class: 'btn btn-primary', type: 'button', onclick: () => { closePopover(); addRepoModal(filterServer()); } }, h('span', { html: icons.plus }), 'Add repository')
+          : h('button', { class: 'btn btn-primary', type: 'button', onclick: () => { closePopover(); serverModal(); } }, h('span', { html: icons.server }), 'Add server'),
       ),
     );
   }, 360);
 }
 
-function branchPopover() {
-  if (!S.status) return;
-  openPopover($('#tb-branch'), async (el) => {
-    const filter = h('input', { type: 'search', placeholder: 'Filter branches', oninput: () => fill() });
-    const body = h('div', { class: 'pop-body' }, h('div', { class: 'pop-empty' }, 'Loading…'));
-    el.append(
-      h('div', { class: 'pop-head' }, filter, h('button', { class: 'btn', type: 'button', onclick: () => { closePopover(); newBranchModal(); } }, 'New branch')),
-      body,
-    );
-    let data = { local: [], remote: [] };
-    const current = S.status.branch.head;
-    const item = (name, sub, onclick, isCurrent) =>
-      h('div', { class: 'pop-item' + (isCurrent ? ' current' : ''), onclick }, h('span', { html: isCurrent ? icons.check : icons.branch }), h('div', { class: 'grow' }, h('div', { class: 'title' }, name), sub && h('div', { class: 'sub' }, sub)));
-    const fill = () => {
-      const term = filter.value.toLowerCase();
-      const local = data.local.filter((b) => b.name.toLowerCase().includes(term));
-      const localNames = new Set(data.local.map((b) => b.name));
-      const remote = data.remote.filter((b) => b.name.toLowerCase().includes(term) && !localNames.has(b.name.slice(b.name.indexOf('/') + 1)));
-      body.replaceChildren(
-        ...[
-          h('div', { class: 'pop-group' }, 'Local branches'),
-          local.length ? local.slice(0, 300).map((b) => item(b.name, ago(b.time), () => switchBranch(b.name, false), b.name === current)) : h('div', { class: 'pop-empty' }, 'No matches'),
-          remote.length ? [h('div', { class: 'pop-group' }, 'Remote branches'), remote.slice(0, 300).map((b) => item(b.name, ago(b.time), () => switchBranch(b.name, true)))] : '',
-        ].flat(Infinity),
+function serverPopover() {
+  openPopover($('#tb-server'), (el) => {
+    const repoCount = (server) => {
+      const n = store.repos.filter((r) => !server || r.serverId === server.id).length;
+      return `${n} repositor${n === 1 ? 'y' : 'ies'}`;
+    };
+    const row = (server) => {
+      const current = (store.serverFilter || null) === (server?.id || null);
+      return h(
+        'div',
+        { class: 'pop-item' + (current ? ' current' : ''), onclick: () => { closePopover(); setServerFilter(server?.id || null); } },
+        server ? h('span', { class: 'dot ' + dotClass(server.id) }) : h('span', { html: icons.server }),
+        h(
+          'div',
+          { class: 'grow' },
+          h('div', { class: 'title' }, server ? server.name || server.host : 'All servers'),
+          h('div', { class: 'sub' }, server ? `${server.user ? server.user + '@' : ''}${server.host} · ${repoCount(server)}` : repoCount(null)),
+        ),
+        current && h('span', { html: icons.check }),
+        server && h('button', { class: 'btn-icon always', type: 'button', title: 'Server settings', html: icons.gear, onclick: (e) => { e.stopPropagation(); closePopover(); serverModal(server); } }),
       );
     };
-    try {
-      data = await git.getBranches(ex, S.repo.path);
-      fill();
-    } catch (e) {
-      body.replaceChildren(h('div', { class: 'pop-empty' }, h('div', { class: 'error-box' }, e.message)));
-    }
-  }, 320);
+    el.append(
+      h('div', { class: 'pop-body' }, store.servers.length ? [row(null), store.servers.map(row)].flat() : h('div', { class: 'pop-empty' }, 'No servers yet.')),
+      h('div', { class: 'pop-foot' }, h('button', { class: 'btn btn-primary', type: 'button', onclick: () => { closePopover(); serverModal(); } }, h('span', { html: icons.plus }), 'Add server')),
+    );
+  }, 300);
+}
+
+function applyTheme() {
+  const t = store.theme || 'system';
+  if (t === 'system') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = t;
+  try {
+    tauri?.window?.getCurrentWindow?.().setTheme(t === 'system' ? null : t)?.catch?.(() => {});
+  } catch {}
+}
+
+function settingsPopover() {
+  openPopover($('#tb-settings'), (el) => {
+    const seg = (options, value, onPick) =>
+      h('div', { class: 'segmented' }, options.map(([v, label]) => h('button', { type: 'button', class: v === value ? 'active' : '', onclick: () => onPick(v) }, label)));
+    const fill = () =>
+      el.replaceChildren(
+        h(
+          'div',
+          { class: 'settings' },
+          h('div', { class: 'settings-label' }, 'Appearance'),
+          seg([['system', 'System'], ['light', 'Light'], ['dark', 'Dark']], store.theme || 'system', (v) => { store.theme = v; save(); applyTheme(); fill(); }),
+          h('div', { class: 'settings-label' }, 'Refresh changes every'),
+          seg([[2, '2 s'], [3, '3 s'], [5, '5 s'], [10, '10 s']], store.pollSeconds, (v) => { store.pollSeconds = v; save(); schedulePoll(); fill(); }),
+          h('button', { class: 'btn btn-block', type: 'button', onclick: () => { closePopover(); shortcutsModal(); } }, 'Keyboard shortcuts'),
+        ),
+      );
+    fill();
+  }, 280);
+}
+
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+const keyLabel = (combo) =>
+  combo
+    .split('+')
+    .map((k) => (isMac ? { Mod: '⌘', Shift: '⇧', Alt: '⌥', Enter: '↩', Backspace: '⌫' }[k] || k : { Mod: 'Ctrl', Backspace: 'Backspace' }[k] || k))
+    .join(isMac ? '' : '+');
+
+// Mirrors GitHub Desktop's shortcuts where it has one.
+const SHORTCUTS = [
+  ['Mod+1', 'Show changes', () => setTab('changes')],
+  ['Mod+2', 'Show history', () => setTab('history')],
+  ['Mod+T', 'Switch repository', () => repoPopover()],
+  ['Mod+B', 'Switch branch', () => branchPopover()],
+  ['Mod+Shift+N', 'New branch', () => S.status && newBranchModal()],
+  ['Mod+Shift+L', 'Switch server', () => serverPopover()],
+  ['Mod+P', 'Push', () => S.status?.remote && runSync({ kind: 'push', run: () => git.push(ex, S.repo.path, { remote: S.status.remote.name, hasUpstream: !!S.status.branch.upstream }) })],
+  ['Mod+Shift+P', 'Pull', () => S.status?.branch.upstream && runSync({ kind: 'pull', run: () => git.pull(ex, S.repo.path) })],
+  ['Mod+Shift+T', 'Fetch', () => S.status?.remote && runSync({ kind: 'fetch', run: () => git.fetchRemote(ex, S.repo.path, S.status.remote.name) })],
+  ['Mod+Enter', 'Commit', () => doCommit()],
+  ['Mod+Shift+M', 'Generate commit message with AI', () => generateMessage()],
+  ['Mod+Shift+A', 'Open in Visual Studio Code', () => S.repo && openExternal(vscodeUrl())],
+  ['Mod+`', 'Copy SSH command for a terminal', () => S.repo && copyText(sshCommand())],
+  ['Mod+Shift+G', 'View on GitHub', () => { const w = git.webUrl(S.status?.remote?.url); if (w) openExternal(w); }],
+  ['Mod+Shift+Backspace', 'Discard all changes', () => currentFiles().length && confirmDiscard(currentFiles())],
+  ['Mod+R', 'Refresh', () => refresh()],
+  ['Mod+,', 'Settings', () => settingsPopover()],
+  ['Mod+/', 'Keyboard shortcuts', () => shortcutsModal()],
+];
+
+function matchShortcut(e) {
+  if (!(e.metaKey || e.ctrlKey) || e.altKey) return null;
+  const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+  const combo = ['Mod', e.shiftKey && 'Shift', key === '?' ? '/' : key].filter(Boolean).join('+');
+  return SHORTCUTS.find(([c]) => c.toUpperCase() === combo.toUpperCase()) || null;
+}
+
+function shortcutsModal() {
+  openModal({
+    title: 'Keyboard shortcuts',
+    body: h(
+      'div',
+      { class: 'shortcuts' },
+      SHORTCUTS.map(([combo, label]) => h('div', { class: 'shortcut' }, h('span', {}, label), h('kbd', {}, keyLabel(combo)))),
+      h('div', { class: 'shortcut' }, h('span', {}, 'Move in lists'), h('kbd', {}, '↑ ↓')),
+      h('div', { class: 'shortcut' }, h('span', {}, 'Check / uncheck the selected file'), h('kbd', {}, isMac ? 'Space' : 'Space')),
+    ),
+  });
+}
+
+function setServerFilter(id) {
+  store.serverFilter = id;
+  save();
+  if (id && S.repo?.serverId !== id) selectRepo(store.repos.find((r) => r.serverId === id)?.id);
+  else renderAll();
+}
+
+function branchPopover(initialTab = 'branches') {
+  if (!S.status) return;
+  openPopover($('#tb-branch'), (el) => {
+    let tab = initialTab;
+    let branches = null;
+    let prs; // undefined = not loaded, null = no gh on the server
+    let prError = null;
+    const current = S.status.branch.head;
+    const filter = h('input', { type: 'search', placeholder: 'Filter', oninput: () => fill() });
+    const newBtn = h('button', { class: 'btn', type: 'button', onclick: () => { closePopover(); newBranchModal(); } }, 'New Branch');
+    const tabBtn = (id, label) => h('button', { class: 'pop-tab', type: 'button', dataset: { tab: id }, onclick: () => { tab = id; fill(); load(); } }, label);
+    const tabs = h('div', { class: 'pop-tabs' }, tabBtn('branches', 'Branches'), tabBtn('prs', 'Pull Requests'));
+    const body = h('div', { class: 'pop-body' });
+    el.append(tabs, h('div', { class: 'pop-head' }, filter, newBtn), body);
+
+    const branchItem = (name, time, onclick) =>
+      h(
+        'div',
+        { class: 'pop-item' + (name === current ? ' current' : ''), onclick },
+        h('span', { html: name === current ? icons.check : icons.branch }),
+        h('div', { class: 'grow' }, h('div', { class: 'title' }, name)),
+        time && h('span', { class: 'sub' }, ago(time)),
+      );
+
+    const fillBranches = () => {
+      if (!branches) return [h('div', { class: 'pop-empty' }, 'Loading…')];
+      const term = filter.value.toLowerCase();
+      const match = (b) => b.name.toLowerCase().includes(term);
+      const byName = new Map(branches.local.map((b) => [b.name, b]));
+      const shown = new Set();
+      const section = (title, list) => {
+        list = list.filter((b) => b && match(b) && !shown.has(b.name));
+        list.forEach((b) => shown.add(b.name));
+        return list.length ? [h('div', { class: 'pop-group' }, title), list.slice(0, 300).map((b) => branchItem(b.name, b.time, () => switchBranch(b.name, false)))] : [];
+      };
+      const localNames = new Set(branches.local.map((b) => b.name));
+      const remote = branches.remote.filter((b) => match(b) && !localNames.has(b.name.slice(b.name.indexOf('/') + 1)));
+      const out = [
+        section('Default Branch', [byName.get(branches.defaultBranch)]),
+        section('Recent Branches', branches.recent.map((n) => byName.get(n))),
+        section('Other Branches', branches.local),
+        remote.length ? [h('div', { class: 'pop-group' }, 'Remote Branches'), remote.slice(0, 300).map((b) => branchItem(b.name, b.time, () => switchBranch(b.name, true)))] : [],
+      ].flat(Infinity);
+      return out.length ? out : [h('div', { class: 'pop-empty' }, 'No branches match.')];
+    };
+
+    const fillPrs = () => {
+      if (prError) return [h('div', { class: 'pop-empty' }, h('div', { class: 'error-box' }, prError))];
+      if (prs === undefined) return [h('div', { class: 'pop-empty' }, 'Loading pull requests…')];
+      if (prs === null)
+        return [h('div', { class: 'pop-empty' }, 'Pull requests come from the GitHub CLI on the server. Install it there and run ', h('code', {}, 'gh auth login'), '.')];
+      const term = filter.value.toLowerCase();
+      const list = prs.filter((p) => `#${p.number} ${p.title} ${p.headRefName}`.toLowerCase().includes(term));
+      if (!list.length) return [h('div', { class: 'pop-empty' }, prs.length ? 'No pull requests match.' : 'No open pull requests.')];
+      return [
+        h('div', { class: 'pop-group' }, `${prs.length} pull request${prs.length === 1 ? '' : 's'} in this repository`),
+        list.map((p) =>
+          h(
+            'div',
+            {
+              class: 'pop-item' + (p.headRefName === current ? ' current' : ''),
+              title: p.url,
+              onclick: () => {
+                closePopover();
+                withBusy('Checking out pull request', () => git.checkoutPullRequest(ex, S.repo.path, p.number));
+              },
+            },
+            h('span', { html: icons.pr }),
+            h(
+              'div',
+              { class: 'grow' },
+              h('div', { class: 'title' }, p.title, p.isDraft && h('span', { class: 'tag-badge' }, 'Draft')),
+              h('div', { class: 'sub' }, `#${p.number} opened by ${p.author?.login || 'someone'} • updated ${ago(Date.parse(p.updatedAt) / 1000)} • ${p.headRefName}`),
+            ),
+          ),
+        ),
+      ].flat(Infinity);
+    };
+
+    const fill = () => {
+      for (const b of tabs.children) b.classList.toggle('active', b.dataset.tab === tab);
+      newBtn.hidden = tab !== 'branches';
+      body.replaceChildren(...(tab === 'branches' ? fillBranches() : fillPrs()));
+    };
+
+    const load = async () => {
+      try {
+        if (tab === 'branches' && !branches) {
+          branches = await git.getBranches(ex, S.repo.path);
+          if (popover?.el === el) fill();
+        }
+        if (tab === 'prs' && prs === undefined && !prError) {
+          prs = await git.getPullRequests(ex, S.repo.path);
+          if (popover?.el === el) fill();
+        }
+      } catch (e) {
+        if (tab === 'prs') prError = e.message;
+        else branches = { local: [], remote: [], recent: [], defaultBranch: null };
+        if (popover?.el === el) {
+          fill();
+          if (tab === 'branches') toast(e.message, 'error', 'Could not list branches');
+        }
+      }
+    };
+    fill();
+    load();
+  }, 360);
 }
 
 function switchBranch(name, remote) {
@@ -959,7 +1228,9 @@ function openMenu(x, y, items) {
     'div',
     { class: 'menu' },
     items.filter(Boolean).map((it) =>
-      it === '-' ? h('div', { class: 'menu-sep' }) : h('div', { class: 'menu-item' + (it.danger ? ' danger' : ''), onclick: () => { closeMenu(); it.run(); } }, it.label),
+      it === '-'
+        ? h('div', { class: 'menu-sep' })
+        : h('div', { class: 'menu-item' + (it.danger ? ' danger' : '') + (it.disabled ? ' disabled' : ''), onclick: it.disabled ? null : () => { closeMenu(); it.run(); } }, it.label),
     ),
   );
   document.body.append(menuEl);
@@ -978,7 +1249,7 @@ function openModal({ title, body, foot, wide, onClose }) {
     onClose?.();
   };
   const onKey = (e) => {
-    if (e.key === 'Escape') {
+    if (e.key === 'Escape' && $('#modal-root').lastElementChild === backdrop) {
       e.stopPropagation();
       close();
     }
@@ -1021,28 +1292,14 @@ function serverModal(existing) {
   const key = h('input', { value: s.identityFile || '', placeholder: '~/.ssh/id_ed25519 (optional)', spellcheck: false });
   const agent = h('input', { type: 'checkbox', checked: !!s.forwardAgent });
   const error = h('div', { class: 'form-error' });
+  const report = h('div', { class: 'test-report' });
+  const browse =
+    tauri.dialog &&
+    h('button', { class: 'btn', type: 'button', onclick: () => pickKey(key, error) }, h('span', { html: icons.folder }), 'Browse…');
   const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, existing ? 'Save' : 'Connect');
+  const testBtn = h('button', { class: 'btn', type: 'button' }, 'Test connection');
 
-  const body = [
-    field('Name', name),
-    field('Host', host),
-    h('div', { class: 'field-row' }, field('User', user), field('Port', port)),
-    field('SSH key', key, 'Leave empty to use your SSH agent and ~/.ssh/config.'),
-    h('label', { class: 'check' }, agent, h('span', {}, h('b', {}, 'Forward my SSH agent'), h('br'), h('span', { class: 'hint' }, 'Lets push/pull on the server use the keys from this computer (e.g. for GitHub).'))),
-    error,
-  ];
-
-  openModal({
-    title: existing ? 'Server settings' : 'Add a server',
-    body,
-    foot: (close) => [
-      existing && h('button', { class: 'btn btn-danger left', type: 'button', onclick: () => { close(); removeServer(existing); } }, 'Remove server'),
-      h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'),
-      saveBtn,
-    ],
-  });
-
-  saveBtn.addEventListener('click', async () => {
+  const readDraft = () => {
     const draft = {
       id: s.id || uid(),
       name: name.value.trim() || host.value.trim(),
@@ -1054,9 +1311,72 @@ function serverModal(existing) {
     };
     if (!draft.host) {
       error.textContent = 'Enter a host.';
-      return;
+      return null;
     }
     error.textContent = '';
+    return draft;
+  };
+
+  openModal({
+    title: existing ? 'Server settings' : 'Add a server',
+    body: [
+      field('Name', name),
+      field('Host', host),
+      h('div', { class: 'field-row' }, field('User', user), field('Port', port)),
+      field('SSH key', h('div', { class: 'input-row' }, key, browse), 'The private key file (not .pub). Leave empty to use your SSH agent and ~/.ssh/config.'),
+      h('label', { class: 'check' }, agent, h('span', {}, h('b', {}, 'Forward my SSH agent'), h('br'), h('span', { class: 'hint' }, 'Lets push/pull on the server use the keys from this computer (e.g. for GitHub).'))),
+      report,
+      error,
+    ],
+    foot: (close) => [
+      existing && h('button', { class: 'btn btn-danger left', type: 'button', onclick: () => { close(); removeServer(existing); } }, 'Remove server'),
+      testBtn,
+      h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'),
+      saveBtn,
+    ],
+  });
+
+  // Uses a throwaway connection id so an edited server's live session is untouched.
+  testBtn.addEventListener('click', async () => {
+    const draft = readDraft();
+    if (!draft) return;
+    const temp = { ...draft, id: 'test-' + uid() };
+    testBtn.disabled = true;
+    testBtn.textContent = 'Testing…';
+    report.replaceChildren();
+    try {
+      await connect(temp);
+      const r = await execOn(
+        temp,
+        `echo "user $(id -un)@$(hostname)"
+git --version 2>/dev/null || echo "git missing"
+PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.claude/local:/usr/local/bin:$PATH"
+if command -v gh >/dev/null 2>&1; then gh auth status >/dev/null 2>&1 && echo "gh ok" || echo "gh signed-out"; else echo "gh missing"; fi
+command -v claude >/dev/null 2>&1 && echo "claude ok" || echo "claude missing"`,
+        30,
+      );
+      const out = r.stdout;
+      const line = (ok, text) => h('div', { class: ok ? 'ok' : 'warn' }, ok ? '✓ ' : '– ', text);
+      const who = /^user (.+)$/m.exec(out)?.[1];
+      const gitVer = /^git version (\S+)/m.exec(out)?.[1];
+      report.replaceChildren(
+        line(true, `Connected as ${who || draft.host}`),
+        line(!!gitVer, gitVer ? `Git ${gitVer}` : 'Git is not installed on the server'),
+        line(/^gh ok$/m.test(out), /^gh ok$/m.test(out) ? 'GitHub CLI signed in — pull requests available' : /^gh signed-out$/m.test(out) ? 'GitHub CLI found but not signed in (run gh auth login on the server)' : 'GitHub CLI not installed — no pull request list'),
+        line(/^claude ok$/m.test(out), /^claude ok$/m.test(out) ? 'Claude Code found — AI commit messages available' : 'Claude Code not installed — no AI commit messages'),
+      );
+    } catch (e) {
+      error.textContent = e.message;
+    } finally {
+      forgetConnection(temp.id);
+      testBtn.disabled = false;
+      testBtn.textContent = 'Test connection';
+    }
+  });
+
+  saveBtn.addEventListener('click', async () => {
+    const draft = readDraft();
+    if (!draft) return;
     saveBtn.disabled = true;
     saveBtn.textContent = 'Connecting…';
     forgetConnection(draft.id);
@@ -1083,6 +1403,25 @@ function serverModal(existing) {
   });
 }
 
+async function pickKey(input, error) {
+  try {
+    const home = await tauri.path.homeDir();
+    const picked = await tauri.dialog.open({
+      title: 'Choose your private SSH key',
+      defaultPath: await tauri.path.join(home, '.ssh'),
+      multiple: false,
+      directory: false,
+    });
+    if (typeof picked !== 'string') return;
+    let path = picked.replace(/\.pub$/, '');
+    if (path.startsWith(home + '/') || path.startsWith(home + '\\')) path = '~' + path.slice(home.length).replace(/\\/g, '/');
+    input.value = path;
+    error.textContent = picked.endsWith('.pub') ? 'Picked the matching private key (without .pub).' : '';
+  } catch (e) {
+    error.textContent = String(e);
+  }
+}
+
 function removeServer(server) {
   confirmModal({
     title: `Remove ${server.name || server.host}?`,
@@ -1093,6 +1432,7 @@ function removeServer(server) {
       forgetConnection(server.id);
       store.servers = store.servers.filter((s) => s.id !== server.id);
       store.repos = store.repos.filter((r) => r.serverId !== server.id);
+      if (store.serverFilter === server.id) store.serverFilter = null;
       save();
       if (S.server?.id === server.id) selectRepo(store.repos[0]?.id);
       else renderAll();
@@ -1124,7 +1464,7 @@ function addRepos(server, paths) {
 
 function addRepoModal(preselected) {
   if (!store.servers.length) return serverModal();
-  let server = preselected || S.server || store.servers[0];
+  let server = preselected || filterServer() || S.server || store.servers[0];
   const serverSelect = h(
     'select',
     { onchange: () => { server = store.servers.find((s) => s.id === serverSelect.value); scan(); } },
@@ -1185,13 +1525,175 @@ function addRepoModal(preselected) {
     body: [
       store.servers.length > 1 && field('Server', serverSelect),
       h('div', { class: 'field' }, h('span', {}, 'Repositories found on the server'), list),
-      h('div', { class: 'field' }, h('span', {}, 'Or enter a path'), h('div', { style: 'display:flex;gap:8px' }, manual, h('button', { class: 'btn', type: 'button', onclick: addManual }, 'Add'))),
+      h(
+        'div',
+        { class: 'field' },
+        h('span', {}, 'Or pick a folder on the server'),
+        h(
+          'div',
+          { class: 'input-row' },
+          manual,
+          h('button', { class: 'btn', type: 'button', onclick: () => folderBrowser(server, manual.value.trim() || '~', (path) => { manual.value = path; addManual(); }) }, h('span', { html: icons.folder }), 'Browse…'),
+          h('button', { class: 'btn', type: 'button', onclick: addManual }, 'Add'),
+        ),
+      ),
       error,
     ],
     foot: (close) => [h('button', { class: 'btn left', type: 'button', onclick: scan }, 'Rescan'), h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'), addBtn],
   });
-  manual.style.flex = '1';
   scan();
+}
+
+function commitMenu(e, c) {
+  e.preventDefault();
+  const st = S.status;
+  const H = S.history;
+  const idx = H.commits.findIndex((x) => x.sha === c.sha);
+  const isHead = c.sha === st?.branch.oid;
+  const unpushed = (x) => !st?.branch.upstream || H.unpushed.has(x.sha);
+  const busy = !!S.busy;
+  const web = git.webUrl(st?.remote?.url);
+  const site = web && new URL(web).hostname === 'github.com' ? 'GitHub' : 'the web';
+  const reload = () => loadHistory(true);
+  openMenu(e.clientX, e.clientY, [
+    {
+      label: 'Amend Commit…',
+      disabled: busy || !isHead || !unpushed(c) || !st.branch.head,
+      run: () => amendCommit(c),
+    },
+    {
+      label: 'Reset to Commit…',
+      disabled: busy || isHead || !st.branch.head || !H.commits.slice(0, idx).every(unpushed),
+      run: () =>
+        confirmModal({
+          title: 'Reset to this commit?',
+          message: `${st.branch.head} will point at “${c.summary}”. The ${idx} newer commit${idx > 1 ? 's' : ''} become uncommitted changes, so nothing is lost.`,
+          confirm: 'Reset',
+          onConfirm: () => withBusy('Reset', () => git.resetToCommit(ex, S.repo.path, c.sha)),
+        }),
+    },
+    { label: 'Checkout Commit', disabled: busy || isHead, run: () => withBusy('Checkout', () => git.checkoutCommit(ex, S.repo.path, c.sha)) },
+    { label: 'Revert Changes in Commit', disabled: busy || !st.branch.head, run: () => withBusy('Revert', () => git.revertCommit(ex, S.repo.path, c.sha, c.parents.length > 1)) },
+    '-',
+    {
+      label: 'Create Branch from Commit',
+      disabled: busy,
+      run: () => promptModal({ title: 'Create a branch', label: 'Name', placeholder: 'feature/my-change', hint: `Starts at ${c.short} and switches to it.`, confirm: 'Create branch', run: (name) => withBusy('Create branch', () => git.createBranchAt(ex, S.repo.path, name, c.sha)) }),
+    },
+    {
+      label: 'Create Tag…',
+      disabled: busy,
+      run: () => promptModal({ title: 'Create a tag', label: 'Name', placeholder: 'v1.0.0', hint: `Tags ${c.short}. It's sent to the remote with your next push.`, confirm: 'Create tag', run: (name) => withBusy('Create tag', async () => { await git.createTag(ex, S.repo.path, name, c.sha); reload(); }) }),
+    },
+    { label: 'Cherry-pick Commit…', disabled: busy, run: () => cherryPickModal(c) },
+    '-',
+    { label: 'Copy SHA', run: () => copyText(c.sha) },
+    { label: 'Copy Tag', disabled: !c.tags.length, run: () => copyText(c.tags[0]) },
+    { label: `View on ${site}`, disabled: !web, run: () => openExternal(`${web}/commit/${c.sha}`) },
+  ]);
+}
+
+/** Like GitHub Desktop's amend: the commit goes back to Changes with its message. */
+async function amendCommit(c) {
+  await withBusy('Amend', async () => {
+    const full = await git.getCommit(ex, S.repo.path, c.sha);
+    await git.undoCommit(ex, S.repo.path, c.sha);
+    $('#summary').value = full.summary;
+    $('#description').value = full.body;
+    S.lastCommit = null;
+  });
+  setTab('changes');
+  $('#summary').focus();
+}
+
+function promptModal({ title, label, placeholder, hint, confirm, run }) {
+  const input = h('input', { placeholder, spellcheck: false });
+  let close;
+  const submit = () => {
+    const value = input.value.trim().replace(/\s+/g, '-');
+    if (!value) return;
+    close();
+    run(value);
+  };
+  input.addEventListener('keydown', (e) => e.key === 'Enter' && submit());
+  close = openModal({
+    title,
+    body: field(label, input, hint),
+    foot: (c) => [h('button', { class: 'btn', type: 'button', onclick: c }, 'Cancel'), h('button', { class: 'btn btn-primary', type: 'button', onclick: submit }, confirm)],
+  });
+}
+
+async function cherryPickModal(c) {
+  let branches;
+  try {
+    branches = (await git.getBranches(ex, S.repo.path)).local.filter((b) => b.name !== S.status?.branch.head);
+  } catch (e) {
+    return toast(e.message, 'error', 'Could not list branches');
+  }
+  if (!branches.length) return toast('Create another branch first.', 'info', 'No other branch to cherry-pick onto');
+  const select = h('select', {}, branches.map((b) => h('option', { value: b.name }, b.name)));
+  openModal({
+    title: 'Cherry-pick commit',
+    body: field('Onto branch', select, `Switches to that branch and applies “${c.summary}” on top.`),
+    foot: (close) => [
+      h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'),
+      h('button', { class: 'btn btn-primary', type: 'button', onclick: () => { close(); withBusy('Cherry-pick', () => git.cherryPick(ex, S.repo.path, c.sha, select.value)); } }, 'Cherry-pick'),
+    ],
+  });
+}
+
+function folderBrowser(server, start, onPick) {
+  const run = (script, t) => execOn(server, script, t);
+  const crumbs = h('div', { class: 'crumbs' });
+  const list = h('div', { class: 'browser', tabindex: '0' });
+  const pickBtn = h('button', { class: 'btn btn-primary', type: 'button', disabled: true }, 'Add this repository');
+  let current = null;
+  let close;
+  const join = (base, name) => `${base === '/' ? '' : base}/${name}`;
+  const pick = (path) => {
+    close();
+    onPick(path);
+  };
+  const row = (label, path, { isRepo, up } = {}) =>
+    h(
+      'div',
+      { class: 'browser-row' + (isRepo ? ' repo' : ''), onclick: () => go(path), title: path },
+      h('span', { html: up ? icons.up : isRepo ? icons.repo : icons.folder }),
+      h('span', { class: 'grow' }, label),
+      isRepo && h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: (e) => { e.stopPropagation(); pick(path); } }, 'Add'),
+    );
+  const go = async (path) => {
+    list.replaceChildren(h('div', { class: 'pop-empty' }, 'Loading…'));
+    try {
+      const res = await git.listDir(run, path);
+      current = res;
+      const parts = res.path.split('/').filter(Boolean);
+      crumbs.replaceChildren(
+        h('button', { class: 'crumb', type: 'button', onclick: () => go('/') }, '/'),
+        ...parts.map((part, i) => h('button', { class: 'crumb', type: 'button', onclick: () => go('/' + parts.slice(0, i + 1).join('/')) }, part)),
+      );
+      pickBtn.disabled = !res.isRepo;
+      pickBtn.textContent = res.isRepo ? 'Add this repository' : 'This folder is not a Git repository';
+      list.replaceChildren(
+        ...[
+          res.path !== '/' && row('..', res.path.replace(/\/[^/]+$/, '') || '/', { up: true }),
+          res.dirs.map((d) => row(d.name, join(res.path, d.name), { isRepo: d.isRepo })),
+          !res.dirs.length && h('div', { class: 'pop-empty' }, 'No folders here.'),
+        ].flat().filter(Boolean),
+      );
+      list.scrollTop = 0;
+    } catch (e) {
+      list.replaceChildren(h('div', { class: 'pop-empty' }, h('div', { class: 'error-box' }, e.message)));
+    }
+  };
+  pickBtn.addEventListener('click', () => current && pick(current.path));
+  close = openModal({
+    title: `Folders on ${server.name || server.host}`,
+    wide: true,
+    body: [crumbs, list, h('div', { class: 'hint' }, 'Click a folder to open it. Git repositories have the repository icon and an Add button.')],
+    foot: (c) => [h('button', { class: 'btn', type: 'button', onclick: c }, 'Cancel'), pickBtn],
+  });
+  go(start);
 }
 
 function newBranchModal() {
@@ -1272,7 +1774,14 @@ function init() {
   }
 
   $('#tb-repo').addEventListener('click', repoPopover);
-  $('#tb-branch').addEventListener('click', branchPopover);
+  $('#tb-server').addEventListener('click', serverPopover);
+  $('#tb-settings').addEventListener('click', settingsPopover);
+  $('#commit-opts-btn').addEventListener('click', commitOptionsMenu);
+  $('#coauthor-btn').addEventListener('click', toggleCoAuthors);
+  $('#ai-btn').addEventListener('click', generateMessage);
+  applyTheme();
+  renderCommitFlags();
+  $('#tb-branch').addEventListener('click', () => branchPopover());
   $('#tb-sync').addEventListener('click', () => runSync());
   $('#tb-sync').addEventListener('contextmenu', (e) => {
     e.preventDefault();
@@ -1302,16 +1811,18 @@ function init() {
   });
   $('#commit-form').addEventListener('submit', doCommit);
   $('#summary').addEventListener('input', updateCommitButton);
-  for (const id of ['#summary', '#description'])
-    $(id).addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) doCommit(e);
-    });
 
   for (const id of ['#file-list', '#commit-list'])
     $(id).addEventListener('keydown', (e) => {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
         moveSelection(e.key === 'ArrowDown' ? 1 : -1);
+      }
+      if (e.key === ' ' && id === '#file-list' && S.selectedPath && e.target === e.currentTarget) {
+        e.preventDefault();
+        if (S.excluded.has(S.selectedPath)) S.excluded.delete(S.selectedPath);
+        else S.excluded.add(S.selectedPath);
+        renderChanges();
       }
     });
   $('#commit-list').addEventListener('scroll', (e) => {
@@ -1325,11 +1836,11 @@ function init() {
       closePopover();
       closeMenu();
     }
-    if (mod && e.key === '1') setTab('changes');
-    if (mod && e.key === '2') setTab('history');
-    if (mod && e.key.toLowerCase() === 't') { e.preventDefault(); repoPopover(); }
-    if (mod && e.key.toLowerCase() === 'b') { e.preventDefault(); branchPopover(); }
-    if (mod && e.key.toLowerCase() === 'r') { e.preventDefault(); refresh(); }
+    const sc = matchShortcut(e);
+    if (sc && !(sc[0] === 'Mod+Enter' && !e.target.closest?.('#commit-form'))) {
+      e.preventDefault();
+      sc[2]();
+    }
   });
 
   // Sidebar resizing.

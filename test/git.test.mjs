@@ -10,7 +10,9 @@ import * as git from '../src/git.js';
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'remotegit-test-')));
 const gitconfig = join(root, 'gitconfig');
 writeFileSync(gitconfig, '[user]\n\tname = Test User\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n');
-const env = { ...process.env, GIT_CONFIG_GLOBAL: gitconfig, GIT_CONFIG_NOSYSTEM: '1', HOME: root };
+// PATH without any real `claude` install, so the fake one in the test HOME is used.
+const PATH = process.env.PATH.split(':').filter((p) => !/\.local\/bin|claude|npm-global/.test(p)).join(':');
+const env = { ...process.env, PATH, GIT_CONFIG_GLOBAL: gitconfig, GIT_CONFIG_NOSYSTEM: '1', HOME: root };
 
 // Same contract as the SSH session: the script runs in `sh -c`.
 const exec = async (script) => {
@@ -170,6 +172,7 @@ test('remote: push/publish, ahead/behind, fetch, pull, branches', async () => {
 
   const br = await git.getBranches(exec, a);
   assert.deepEqual(br.local.map((x) => x.name), ['main']);
+  assert.equal(br.defaultBranch, 'main');
   assert.deepEqual(br.remote.map((x) => x.name).sort(), ['origin/feature', 'origin/main']);
   await git.checkoutRemoteBranch(exec, a, 'origin/feature');
   assert.equal((await git.getStatus(exec, a)).branch.head, 'feature');
@@ -177,6 +180,7 @@ test('remote: push/publish, ahead/behind, fetch, pull, branches', async () => {
   await git.checkoutRemoteBranch(exec, a, 'origin/feature'); // reuses the local branch
   await git.createBranch(exec, a, 'new-thing');
   assert.equal((await git.getStatus(exec, a)).branch.head, 'new-thing');
+  assert.deepEqual((await git.getBranches(exec, a)).recent, ['new-thing', 'feature', 'main']);
   await assert.rejects(git.checkoutBranch(exec, a, 'does-not-exist'), git.GitError);
 });
 
@@ -195,6 +199,99 @@ test('undo commit keeps changes, refuses if branch moved', async () => {
   await git.undoCommit(exec, dir, c2);
   assert.equal(sh(dir, 'git rev-parse HEAD').trim(), c1);
   assert.equal((await git.getStatus(exec, dir)).files[0].path, 'f.txt');
+});
+
+test('commit actions: tag, branch, revert, reset, checkout, cherry-pick', async () => {
+  const dir = newRepo();
+  const commitFile = (name, text, msg) => {
+    writeFileSync(join(dir, name), text);
+    sh(dir, `git add -A && git commit -qm ${msg}`);
+    return sh(dir, 'git rev-parse HEAD').trim();
+  };
+  const c1 = commitFile('f.txt', '1\n', 'c1');
+  const c2 = commitFile('f.txt', '2\n', 'c2');
+  const c3 = commitFile('g.txt', 'g\n', 'c3');
+
+  await git.createTag(exec, dir, 'v1.0', c2);
+  const log = await git.getLog(exec, dir);
+  assert.deepEqual(log.commits.find((c) => c.sha === c2).tags, ['v1.0']);
+  assert.deepEqual(log.commits.find((c) => c.sha === c3).tags, []);
+
+  await git.revertCommit(exec, dir, c3, false);
+  assert.ok(!existsSync(join(dir, 'g.txt')));
+  assert.match(sh(dir, 'git log -1 --format=%s'), /^Revert "c3"/);
+
+  await git.createBranchAt(exec, dir, 'from-c1', c1);
+  assert.equal(sh(dir, 'git rev-parse --abbrev-ref HEAD').trim(), 'from-c1');
+  assert.equal(readFileSync(join(dir, 'f.txt'), 'utf8'), '1\n');
+  await git.cherryPick(exec, dir, c3, 'from-c1');
+  assert.ok(existsSync(join(dir, 'g.txt')));
+
+  sh(dir, 'git switch -q main');
+  await git.resetToCommit(exec, dir, c1);
+  assert.equal(sh(dir, 'git rev-parse HEAD').trim(), c1);
+  assert.equal(readFileSync(join(dir, 'f.txt'), 'utf8'), '2\n'); // kept as an uncommitted change
+  sh(dir, 'git checkout -q -- .');
+
+  await git.checkoutCommit(exec, dir, c1);
+  assert.equal((await git.getStatus(exec, dir)).branch.head, null);
+});
+
+test('commit options, co-authors and empty commits', async () => {
+  const dir = newRepo();
+  writeFileSync(join(dir, 'f.txt'), '1\n');
+  const st = await git.getStatus(exec, dir);
+  const coAuthors = git.parseCoAuthors('@octocat, Jane Doe <jane@example.com>, nonsense');
+  assert.deepEqual(coAuthors, ['octocat <octocat@users.noreply.github.com>', 'Jane Doe <jane@example.com>', null]);
+  await git.commit(exec, dir, { files: st.files, all: true, summary: 'With trailers', coAuthors: coAuthors.filter(Boolean), signoff: true });
+  const msg = sh(dir, 'git log -1 --format=%B');
+  assert.match(msg, /^With trailers\n\nCo-authored-by: octocat <octocat@users.noreply.github.com>\nCo-authored-by: Jane Doe <jane@example.com>\nSigned-off-by: Test User <test@example.com>/);
+
+  mkdirSync(join(dir, '.git', 'hooks'), { recursive: true });
+  writeFileSync(join(dir, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\necho blocked >&2\nexit 1\n', { mode: 0o755 });
+  await assert.rejects(git.commit(exec, dir, { files: [], all: false, summary: 'Empty', allowEmpty: true }), /blocked/);
+  await git.commit(exec, dir, { files: [], all: false, summary: 'Empty', allowEmpty: true, noVerify: true });
+  assert.equal(sh(dir, 'git log -1 --format=%s').trim(), 'Empty');
+});
+
+test('generateCommitMessage pipes the diff to claude on the server', async () => {
+  const dir = newRepo();
+  writeFileSync(join(dir, 'a.txt'), 'old\n');
+  sh(dir, `git add -A && git commit -qm "feat: it's \\"quoted\\" \\$HOME"`);
+  writeFileSync(join(dir, 'a.txt'), 'new\n');
+  writeFileSync(join(dir, 'b.txt'), 'brand new\n');
+  const st = await git.getStatus(exec, dir);
+
+  assert.equal(await git.generateCommitMessage(exec, dir, st.files, true), null); // no claude yet
+
+  const bin = join(root, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(root, 'claude-input'), '');
+  writeFileSync(
+    join(bin, 'claude'),
+    `#!/bin/sh\n[ "$1" = -p ] || exit 9\nprintf '%s' "$2" > ${root}/claude-prompt\ncat > ${root}/claude-input\nprintf '\\140\\140\\140\\nUpdate a.txt and add b.txt\\n\\nBody line.\\n\\140\\140\\140\\n'\n`,
+    { mode: 0o755 },
+  );
+  const msg = await git.generateCommitMessage(exec, dir, st.files, true);
+  assert.deepEqual(msg, { summary: 'Update a.txt and add b.txt', description: 'Body line.' });
+  const input = readFileSync(join(root, 'claude-input'), 'utf8');
+  assert.match(input, /-old\n\+new/);
+  assert.match(input, /\+brand new/);
+  assert.match(readFileSync(join(root, 'claude-prompt'), 'utf8'), /feat: it's "quoted" \$HOME/);
+  rmSync(join(bin, 'claude'));
+});
+
+test('listDir browses folders and marks repositories', async () => {
+  const dir = newRepo();
+  mkdirSync(join(dir, 'plain dir'));
+  mkdirSync(join(dir, 'nested'));
+  sh(join(dir, 'nested'), 'git init -q');
+  writeFileSync(join(dir, 'file.txt'), 'x');
+  const res = await git.listDir(exec, dir);
+  assert.equal(res.path, dir);
+  assert.equal(res.isRepo, true);
+  assert.deepEqual(res.dirs, [{ name: 'nested', isRepo: true }, { name: 'plain dir', isRepo: false }]);
+  assert.equal((await git.listDir(exec, '~')).path, root);
 });
 
 test('ignorePath appends with a newline guard', async () => {

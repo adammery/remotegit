@@ -34,7 +34,17 @@
           <span class="sync-counts" id="sync-counts"></span>
         </button>
         <div class="tb-fill"></div>
-        <div class="conn" id="conn" hidden></div>
+        <button class="tb-btn tb-server" id="tb-server" type="button">
+          <span class="tb-icon server-icon"><span data-icon="server"></span><span class="dot" id="server-dot" hidden></span></span>
+          <span class="tb-text">
+            <span class="tb-label">Server</span>
+            <span class="tb-value" id="tb-server-name">All servers</span>
+          </span>
+          <span class="tb-caret" data-icon="caret"></span>
+        </button>
+        <button class="tb-btn tb-settings" id="tb-settings" type="button" title="Settings">
+          <span class="tb-icon" data-icon="gear"></span>
+        </button>
       </header>
 
       <div class="main">
@@ -61,7 +71,16 @@
                 <span class="avatar" id="avatar"></span>
                 <input id="summary" placeholder="Summary (required)" spellcheck="true" />
               </div>
-              <textarea id="description" placeholder="Description" spellcheck="true"></textarea>
+              <div class="desc-box">
+                <textarea id="description" placeholder="Description" spellcheck="true"></textarea>
+                <input id="coauthors" placeholder="@github-login or Name &lt;email&gt;, separated by commas" spellcheck="false" hidden />
+                <div class="desc-tools">
+                  <button class="btn-icon" id="coauthor-btn" type="button" title="Add co-authors" data-icon="personAdd"></button>
+                  <button class="btn-icon" id="ai-btn" type="button" title="Write the message with Claude (on the server)" data-icon="sparkle"></button>
+                  <button class="btn-icon" id="commit-opts-btn" type="button" title="Commit options" data-icon="gear"></button>
+                  <span class="desc-flags" id="commit-flags"></span>
+                </div>
+              </div>
               <button class="btn btn-primary btn-block" id="commit-btn" type="submit" disabled>Commit to <b>main</b></button>
             </form>
           </section>

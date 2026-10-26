@@ -967,7 +967,7 @@ function repoPopover() {
             : h('div', { class: 'pop-empty' }, term ? 'No matches' : 'No repositories added yet'),
         ];
       });
-      body.replaceChildren(...groups.flat(Infinity), store.servers.length ? '' : h('div', { class: 'pop-empty' }, 'Add a server to get started.'));
+      body.replaceChildren(...groups.flat(Infinity), store.servers.length ? '' : h('div', { class: 'pop-empty' }, 'No servers yet. Add one from the Server menu in the top right.'));
     };
     fill();
     el.append(
@@ -976,9 +976,7 @@ function repoPopover() {
       h(
         'div',
         { class: 'pop-foot' },
-        store.servers.length
-          ? h('button', { class: 'btn btn-primary', type: 'button', onclick: () => { closePopover(); addRepoModal(filterServer()); } }, h('span', { html: icons.plus }), 'Add repository')
-          : h('button', { class: 'btn btn-primary', type: 'button', onclick: () => { closePopover(); serverModal(); } }, h('span', { html: icons.server }), 'Add server'),
+        h('button', { class: 'btn btn-primary', type: 'button', disabled: !store.servers.length, onclick: () => { closePopover(); addRepoModal(filterServer()); } }, h('span', { html: icons.plus }), 'Add repository'),
       ),
     );
   }, 360);

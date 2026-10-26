@@ -5,7 +5,8 @@
 
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -28,9 +29,21 @@ window.__TAURI__ = {
 };
 </script>`;
 
-function sh(script, timeoutSecs = 60) {
+// Like the SSH session: big scripts can't be a single exec argument, so they run from a file.
+async function sh(script, timeoutSecs = 60) {
+  if (script.length <= 64 * 1024) return run(['-c', script], timeoutSecs);
+  const dir = await mkdtemp(join(tmpdir(), 'remotegit-'));
+  try {
+    await writeFile(join(dir, 'script.sh'), script);
+    return await run([join(dir, 'script.sh')], timeoutSecs);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+function run(args, timeoutSecs) {
   return new Promise((resolve, reject) => {
-    const child = spawn('sh', ['-c', script], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('sh', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
     const out = [];
     const err = [];
     child.stdout.on('data', (d) => out.push(d));

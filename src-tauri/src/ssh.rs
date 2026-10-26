@@ -13,6 +13,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(25);
 /// stderr's marker is printed right after stdout's, so it never takes long.
 const STDERR_GRACE: Duration = Duration::from_secs(5);
+/// Scripts up to this size are passed inline as a `sh -c` argument.
+const INLINE_LIMIT: usize = 64 * 1024;
 
 pub struct ExecOutput {
     pub stdout: String,
@@ -138,10 +140,21 @@ impl Session {
         }
         self.seq += 1;
         let id = format!("rg{}x{}", self.nonce, self.seq);
-        let line = format!(
-            "sh -c {} </dev/null; printf '\\036%s %d\\036\\n' {id} \"$?\"; printf '\\036%s\\036\\n' {id} >&2\n",
-            shell_quote(script)
-        );
+        let markers = format!("printf '\\036%s %d\\036\\n' {id} \"$?\"; printf '\\036%s\\036\\n' {id} >&2\n");
+        let line = if script.len() <= INLINE_LIMIT {
+            format!("sh -c {} </dev/null; {markers}", shell_quote(script))
+        } else {
+            // One exec argument can't exceed ~128 KiB on Linux, so big scripts
+            // (patches, huge path lists) go to a temp file through the
+            // shell's builtin printf, then run from there.
+            let var = format!("{id}f");
+            let mut s = format!("{var}=$(mktemp)\n");
+            for chunk in chunks(script, INLINE_LIMIT) {
+                s += &format!("printf '%s' {} >> \"${var}\"\n", shell_quote(chunk));
+            }
+            s += &format!("sh \"${var}\" </dev/null; set -- $?; rm -f \"${var}\"; (exit $1); {markers}");
+            s
+        };
         let result = self.run(&line, &id, timeout);
         if result.is_err() {
             // Session state is unknown after a failure; never reuse it.
@@ -271,6 +284,22 @@ impl Stream {
     }
 }
 
+/// Splits on char boundaries into pieces of at most `max` bytes.
+fn chunks(s: &str, max: usize) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = s;
+    while !rest.is_empty() {
+        let mut end = rest.len().min(max);
+        while !rest.is_char_boundary(end) {
+            end -= 1;
+        }
+        let (head, tail) = rest.split_at(end);
+        out.push(head);
+        rest = tail;
+    }
+    out
+}
+
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
@@ -318,6 +347,18 @@ mod tests {
         let r = s.exec("head -c 3000000 /dev/zero | tr '\\0' a", T).unwrap();
         assert_eq!(r.stdout.len(), 3_000_000);
         assert!(r.stdout.bytes().all(|b| b == b'a'));
+    }
+
+    #[test]
+    fn scripts_larger_than_the_argument_limit() {
+        let mut s = local();
+        // 300 KB with multi-byte chars and quotes around chunk boundaries.
+        let payload = "ž'a\"$".repeat(50_000);
+        let script = format!("printf '%s' {} | wc -c; exit 4", shell_quote(&payload));
+        let r = s.exec(&script, T).unwrap();
+        assert_eq!(r.stdout.trim(), payload.len().to_string());
+        assert_eq!(r.code, 4);
+        assert_eq!(s.exec("echo after", T).unwrap().stdout, "after\n");
     }
 
     #[test]

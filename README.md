@@ -163,6 +163,10 @@ Layout:
 
 Password login (keys only), resolving merge conflicts inside the app (conflicts are shown; resolve them in an editor, then commit), stash, reordering commits, image diffs, signing commits with a passphrase-protected key.
 
+## License
+
+Free to use, modify, fork and share, including at work. You may not sell RemoteGit or a product or service built mainly on it. Keep the copyright and license notice in copies and forks. The terms are the MIT License with the [Commons Clause](https://commonsclause.com) condition; see [LICENSE](LICENSE).
+
 ## Credits
 
 Icons are [Octicons](https://primer.style/octicons) by GitHub Inc., used under the MIT License. Syntax highlighting uses [highlight.js](https://highlightjs.org) (BSD-3-Clause, see `src/vendor/highlight.js-LICENSE`). RemoteGit is not affiliated with or endorsed by GitHub.

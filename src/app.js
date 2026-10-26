@@ -15,6 +15,7 @@ const store = Object.assign(
     sidebarWidth: 300,
     pollSeconds: 3,
     theme: 'system',
+    style: 'github',
     commitOpts: { noVerify: false, signoff: false, allowEmpty: false },
   },
   readStore(),
@@ -69,9 +70,32 @@ function ago(sec) {
   return `${n} ${name}${n > 1 ? 's' : ''} ago`;
 }
 
-// Same lookup GitHub Desktop uses: the picture of the account that owns the email.
+// GitHub account `gh` is signed in to, per server; used for the user's own commits.
+const ghUsers = new Map();
+
+function loadGitHubUser(server) {
+  if (ghUsers.has(server.id)) return;
+  ghUsers.set(server.id, null);
+  git.getGitHubUser((script, t) => execOn(server, script, t)).then(
+    (user) => {
+      if (!user) return;
+      ghUsers.set(server.id, user);
+      if (S.server?.id === server.id) {
+        renderChanges();
+        renderHistory();
+        if (S.tab === 'history') renderContent();
+      }
+    },
+    () => ghUsers.delete(server.id),
+  );
+}
+
+// Your own email maps to the signed-in GitHub account even when it isn't public
+// on GitHub; anyone else goes through the email lookup GitHub Desktop uses.
 function avatarUrl(email) {
   if (!email) return null;
+  const me = S.server && ghUsers.get(S.server.id);
+  if (me && email.toLowerCase() === S.status?.user.email?.toLowerCase()) return me.avatar;
   const noreply = /^(\d+)\+[^@]+@users\.noreply\.github\.com$/i.exec(email);
   if (noreply) return `https://avatars.githubusercontent.com/u/${noreply[1]}?s=64`;
   return `https://avatars.githubusercontent.com/u/e?email=${encodeURIComponent(email)}&s=64`;
@@ -249,6 +273,7 @@ async function refresh() {
         renderContent();
     }
     if (headMoved && S.tab === 'history') loadHistory(true);
+    loadGitHubUser(S.server);
     if (S.tab === 'changes') await refreshDiff();
   } catch (e) {
     if (gen !== S.gen) return;
@@ -567,6 +592,7 @@ function renderToolbar() {
   const counts = $('#sync-counts');
   counts.replaceChildren();
   syncBtn.disabled = !action || !!S.busy;
+  $('#tb-sync-more').disabled = !st?.remote || !!S.busy;
   if (S.busy) {
     $('#sync-icon').innerHTML = icons.spinner;
     title.textContent = `${S.busy}…`;
@@ -729,7 +755,7 @@ function renderHistory() {
         h('div', { class: 'commit-summary', title: c.summary }, c.summary),
         h('div', { class: 'commit-meta' }, avatar(c.author, true, c.email), `${c.author} • ${ago(c.time)}`, c.tags.map((t) => h('span', { class: 'tag-badge' }, t))),
       ),
-      H.unpushed.has(c.sha) && h('span', { class: 'unpushed', title: 'Not pushed yet', html: icons.up }),
+      H.unpushed.has(c.sha) && h('span', { class: 'unpushed', title: 'Not pushed yet' }, h('span', { html: icons.up })),
     ),
   );
   if (!H.commits.length) rows.push(h('div', { class: 'list-note' }, H.loading ? 'Loading…' : 'No commits yet.'));
@@ -1012,6 +1038,7 @@ function serverPopover() {
 }
 
 function applyTheme() {
+  document.documentElement.dataset.style = store.style || 'github';
   const t = store.theme || 'system';
   if (t === 'system') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = t;
@@ -1029,6 +1056,8 @@ function settingsPopover() {
         h(
           'div',
           { class: 'settings' },
+          h('div', { class: 'settings-label' }, 'Style'),
+          seg([['github', 'GitHub'], ['remotegit', 'RemoteGit']], store.style || 'github', (v) => { store.style = v; save(); applyTheme(); fill(); }),
           h('div', { class: 'settings-label' }, 'Appearance'),
           seg([['system', 'System'], ['light', 'Light'], ['dark', 'Dark']], store.theme || 'system', (v) => { store.theme = v; save(); applyTheme(); fill(); }),
           h('div', { class: 'settings-label' }, 'Refresh changes every'),
@@ -1781,15 +1810,22 @@ function init() {
   renderCommitFlags();
   $('#tb-branch').addEventListener('click', () => branchPopover());
   $('#tb-sync').addEventListener('click', () => runSync());
-  $('#tb-sync').addEventListener('contextmenu', (e) => {
-    e.preventDefault();
+  const syncMenu = (x, y) => {
     const remote = S.status?.remote?.name;
     if (!remote || S.busy) return;
-    openMenu(e.clientX, e.clientY, [
+    openMenu(x, y, [
       { label: `Fetch ${remote}`, run: () => runSync({ kind: 'fetch', run: () => git.fetchRemote(ex, S.repo.path, remote) }) },
       S.status.branch.upstream && { label: `Pull ${remote}`, run: () => runSync({ kind: 'pull', run: () => git.pull(ex, S.repo.path) }) },
       S.status.branch.head && { label: `Push ${remote}`, run: () => runSync({ kind: 'push', run: () => git.push(ex, S.repo.path, { remote, hasUpstream: !!S.status.branch.upstream }) }) },
     ]);
+  };
+  $('#tb-sync').addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    syncMenu(e.clientX, e.clientY);
+  });
+  $('#tb-sync-more').addEventListener('click', (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    syncMenu(r.left, r.bottom + 2);
   });
   for (const t of document.querySelectorAll('.tab')) t.addEventListener('click', () => setTab(t.dataset.tab));
 

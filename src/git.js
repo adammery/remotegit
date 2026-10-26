@@ -339,6 +339,19 @@ else ${GIT} switch -q -c ${q(local)} --track ${q(remoteName)}; fi`,
   );
 }
 
+/** The GitHub account `gh` is signed in to on the server, or null. */
+export async function getGitHubUser(exec) {
+  const r = await exec(
+    `PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+command -v gh >/dev/null 2>&1 || exit 127
+GH_PROMPT_DISABLED=1 gh api user --jq '[.login, .avatar_url] | @tsv'`,
+    30,
+  );
+  if (r.code !== 0) return null;
+  const [login, avatar] = r.stdout.trim().split('\t');
+  return login ? { login, avatar } : null;
+}
+
 /** Open PRs via the GitHub CLI on the server; null when `gh` isn't installed. */
 export async function getPullRequests(exec, repo) {
   const r = await exec(

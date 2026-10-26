@@ -45,24 +45,24 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --toolbar-bg: #24292f;
-    --toolbar-hover: #32383f;
-    --toolbar-active: #161b22;
-    --toolbar-border: #0d1117;
+    --toolbar-bg: #161a1f;
+    --toolbar-hover: #262c33;
+    --toolbar-active: #2d343c;
+    --toolbar-border: #080a0c;
     --toolbar-text: #ffffff;
     --toolbar-muted: #b1bac4;
-    --bg: #161b22;
-    --sidebar-bg: #1d2229;
-    --panel: #2a3038;
-    --border: #3a414a;
-    --row-border: #2a3038;
+    --bg: #24292e;
+    --sidebar-bg: #24292e;
+    --panel: #2f363d;
+    --border: #3d444d;
+    --row-border: #31383f;
     --text: #f0f3f6;
     --muted: #a7b0ba;
-    --hover: #262c34;
-    --selected: #2b3a4f;
+    --hover: #2c3238;
+    --selected: #33445a;
     --selected-focus: #1f6feb;
     --checkbox-border: #7d8590;
-    --input-bg: #0d1117;
+    --input-bg: #1b1f24;
     --input-border: #4a525c;
     --accent: #4493f8;
     --primary: #1f6feb;
@@ -84,24 +84,24 @@
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --toolbar-bg: #24292f;
-  --toolbar-hover: #32383f;
-  --toolbar-active: #161b22;
-  --toolbar-border: #0d1117;
+  --toolbar-bg: #161a1f;
+  --toolbar-hover: #262c33;
+  --toolbar-active: #2d343c;
+  --toolbar-border: #080a0c;
   --toolbar-text: #ffffff;
   --toolbar-muted: #b1bac4;
-  --bg: #161b22;
-  --sidebar-bg: #1d2229;
-  --panel: #2a3038;
-  --border: #3a414a;
-  --row-border: #2a3038;
+  --bg: #24292e;
+  --sidebar-bg: #24292e;
+  --panel: #2f363d;
+  --border: #3d444d;
+  --row-border: #31383f;
   --text: #f0f3f6;
   --muted: #a7b0ba;
-  --hover: #262c34;
-  --selected: #2b3a4f;
+  --hover: #2c3238;
+  --selected: #33445a;
   --selected-focus: #1f6feb;
   --checkbox-border: #7d8590;
-  --input-bg: #0d1117;
+  --input-bg: #1b1f24;
   --input-border: #4a525c;
   --accent: #4493f8;
   --primary: #1f6feb;
@@ -167,17 +167,25 @@ svg { display: block; flex: none; }
 .tb-btn:disabled { opacity: 0.55; }
 .tb-repo { width: var(--sidebar-w); flex: none; }
 .tb-branch { width: 230px; flex: none; }
-.tb-sync { width: 230px; flex: none; }
+.tb-sync { width: 206px; flex: none; border-right: 0; }
+.tb-sync-more { width: 30px; flex: none; padding: 0; justify-content: center; }
 .tb-icon { color: var(--toolbar-text); opacity: 0.9; }
 .tb-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .tb-label { color: var(--toolbar-muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tb-value { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tb-caret { opacity: 0.8; }
 .tb-fill { flex: 1; }
-.sync-counts { display: flex; gap: 6px; font-size: 11px; font-weight: 600; }
-.sync-counts span { display: flex; align-items: center; gap: 1px; }
+.sync-counts { display: flex; gap: 4px; font-size: 11px; font-weight: 600; }
+.sync-counts > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--toolbar-text) 14%, transparent);
+}
 .sync-counts svg { width: 12px; height: 12px; }
-.tb-server { width: 220px; flex: none; border-right: 0; border-left: 1px solid var(--toolbar-border); }
+.tb-server { width: 168px; gap: 8px; flex: none; border-right: 0; border-left: 1px solid var(--toolbar-border); }
 .server-icon { position: relative; }
 .server-icon .dot { position: absolute; right: -4px; bottom: -3px; box-shadow: 0 0 0 2px var(--toolbar-bg); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
@@ -381,7 +389,19 @@ input[type="checkbox"]:focus-visible { box-shadow: 0 0 0 3px rgba(68, 147, 248, 
 .commit-row .grow { flex: 1; min-width: 0; }
 .commit-summary { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .commit-meta { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; margin-top: 2px; white-space: nowrap; overflow: hidden; }
-.unpushed { color: var(--muted); }
+.unpushed {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.unpushed svg { width: 12px; height: 12px; }
+.commit-list:focus .commit-row.selected .unpushed { background: rgba(255, 255, 255, 0.2); border-color: transparent; color: inherit; }
 
 /* ------------------------------------------------------------ content */
 .blank { flex: 1; overflow: auto; display: flex; justify-content: center; padding: 48px 32px; }
@@ -637,3 +657,97 @@ input[type="checkbox"]:focus-visible { box-shadow: 0 0 0 3px rgba(68, 147, 248, 
 .shortcuts { display: flex; flex-direction: column; }
 .shortcut { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--row-border); }
 kbd { font: 12px var(--mono); padding: 1px 6px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; background: var(--panel); color: var(--text); }
+
+/* ------------------------------------------------------------ RemoteGit style
+   Ink and coral from the app icon. Light and dark each apply for both the
+   system setting and an explicit choice. */
+@media (prefers-color-scheme: light) {
+  :root[data-style="remotegit"]:not([data-theme="dark"]) {
+    --toolbar-bg: #ffffff;
+    --toolbar-hover: #f3f4f6;
+    --toolbar-active: #fdf1ec;
+    --toolbar-border: #e3e6ea;
+    --toolbar-text: #1f2328;
+    --toolbar-muted: #636c76;
+    --bg: #ffffff;
+    --sidebar-bg: #fbfbfc;
+    --panel: #f3f4f6;
+    --accent: #e5532d;
+    --primary: #1f2328;
+    --primary-hover: #343a42;
+    --primary-text: #ffffff;
+    --selected: #fde6dd;
+    --selected-focus: #1f2328;
+    --selected-focus-text: #ffffff;
+    --diff-hunk-bg: #fdf1ec;
+    --diff-hunk-text: #8a4a35;
+  }
+}
+:root[data-style="remotegit"][data-theme="light"] {
+  --toolbar-bg: #ffffff;
+  --toolbar-hover: #f3f4f6;
+  --toolbar-active: #fdf1ec;
+  --toolbar-border: #e3e6ea;
+  --toolbar-text: #1f2328;
+  --toolbar-muted: #636c76;
+  --bg: #ffffff;
+  --sidebar-bg: #fbfbfc;
+  --panel: #f3f4f6;
+  --accent: #e5532d;
+  --primary: #1f2328;
+  --primary-hover: #343a42;
+  --primary-text: #ffffff;
+  --selected: #fde6dd;
+  --selected-focus: #1f2328;
+  --selected-focus-text: #ffffff;
+  --diff-hunk-bg: #fdf1ec;
+  --diff-hunk-text: #8a4a35;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-style="remotegit"]:not([data-theme="light"]) {
+    color-scheme: dark;
+    --toolbar-bg: #121417;
+    --toolbar-hover: #22262b;
+    --toolbar-active: #2a2320;
+    --toolbar-border: #050607;
+    --toolbar-text: #ffffff;
+    --toolbar-muted: #b4bcc4;
+    --bg: #1c1f23;
+    --sidebar-bg: #1c1f23;
+    --panel: #2a2e34;
+    --hover: #262a2f;
+    --accent: #ff7a50;
+    --primary: #f0643c;
+    --primary-hover: #ff7a50;
+    --primary-text: #ffffff;
+    --selected: #3a2a24;
+    --selected-focus: #c9502c;
+    --selected-focus-text: #ffffff;
+    --input-bg: #15171a;
+    --diff-hunk-bg: rgba(240, 100, 60, 0.14);
+    --diff-hunk-text: #e7b3a1;
+  }
+}
+:root[data-style="remotegit"][data-theme="dark"] {
+  color-scheme: dark;
+  --toolbar-bg: #121417;
+  --toolbar-hover: #22262b;
+  --toolbar-active: #2a2320;
+  --toolbar-border: #050607;
+  --toolbar-text: #ffffff;
+  --toolbar-muted: #b4bcc4;
+  --bg: #1c1f23;
+  --sidebar-bg: #1c1f23;
+  --panel: #2a2e34;
+  --hover: #262a2f;
+  --accent: #ff7a50;
+  --primary: #f0643c;
+  --primary-hover: #ff7a50;
+  --primary-text: #ffffff;
+  --selected: #3a2a24;
+  --selected-focus: #c9502c;
+  --selected-focus-text: #ffffff;
+  --input-bg: #15171a;
+  --diff-hunk-bg: rgba(240, 100, 60, 0.14);
+  --diff-hunk-text: #e7b3a1;
+}

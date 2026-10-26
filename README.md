@@ -2,13 +2,17 @@
 
 A GitHub Desktop-style Git client for repositories that live **on a server**. It connects over SSH, so the code stays on the server while you see changes, diffs, history and branches, and commit, push and pull from your Mac or Windows PC. Repositories on your own computer work too.
 
-![Changes](docs/screenshot.png)
-
 ## Download
 
 Get the latest version from **[Releases](https://github.com/adammery/remotegit/releases/latest)**: the `.dmg` for macOS (Apple Silicon and Intel) or the `-setup.exe` for Windows.
 
-RemoteGit checks for new versions on its own and shows a popup with **Install and restart**. You can also check by hand in ⚙ → *Check for updates*, where the current version is shown. Updates are signed, and the app only installs ones signed with the project's key.
+> **The app is not code-signed** with an Apple or Microsoft certificate, so macOS and Windows warn the first time you open it. It's safe to continue:
+> - **macOS:** open the app once, then go to *System Settings → Privacy & Security* and click **Open Anyway**. Or run `xattr -cr /Applications/RemoteGit.app` in Terminal.
+> - **Windows:** when SmartScreen says "Windows protected your PC", click **More info → Run anyway**.
+
+RemoteGit checks for new versions on its own and shows a popup with **Install and restart**. You can also check by hand in ⚙ → *Check for updates*, where the current version is shown. Each update is checked against the project's own signing key before it's installed, so only genuine updates go in. That check is separate from Apple or Microsoft code signing.
+
+![Changes](docs/screenshot.png)
 
 ## How it works
 

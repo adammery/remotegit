@@ -16,8 +16,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - run: gh release create "$TAG" --repo "$REPO" --title "RemoteGit $TAG" --notes "Download the .dmg for macOS or the -setup.exe for Windows below. Installed copies update themselves."
+      - run: gh release create "$TAG" --repo "$REPO" --title "RemoteGit $TAG" --notes "$NOTES"
         env:
+          NOTES: "**Download:** macOS → `RemoteGit_*_universal.dmg` (Apple Silicon and Intel) · Windows → `RemoteGit_*_x64-setup.exe` (or the `.msi`). The other files are used by automatic updates.\n\n**Not code-signed:** the app has no Apple or Microsoft certificate, so the first launch shows a security warning. macOS: open it once, then *System Settings → Privacy & Security → Open Anyway* (or run `xattr -cr /Applications/RemoteGit.app`). Windows: SmartScreen → *More info → Run anyway*.\n\nInstalled copies update themselves."
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}

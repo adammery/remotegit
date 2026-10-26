@@ -406,6 +406,24 @@ function selectCommitFile(f) {
   loadCommitDiff();
 }
 
+// ↑ ↓ move between the commit's files, ← goes back to the commit list.
+function commitFilesKey(e) {
+  if (e.key === 'ArrowLeft') {
+    e.preventDefault();
+    $('#commit-list').focus();
+  }
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  e.preventDefault();
+  // While another commit is still loading, the list on screen belongs to the old one.
+  const c = S.commit;
+  if (c?.sha !== S.selectedSha) return;
+  const i = c.files.indexOf(S.commitFile);
+  const next = c.files[Math.max(0, Math.min(c.files.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)))];
+  if (!next || next === S.commitFile) return;
+  selectCommitFile(next);
+  $('#commit-files .selected')?.scrollIntoView({ block: 'nearest' });
+}
+
 // ============================================================ actions
 
 async function withBusy(label, fn) {
@@ -1118,7 +1136,7 @@ function historyView() {
   );
   const files = h(
     'div',
-    { class: 'file-list', id: 'commit-files', tabindex: '0', dataset: { sha: c.sha } },
+    { class: 'file-list', id: 'commit-files', tabindex: '0', dataset: { sha: c.sha }, onkeydown: commitFilesKey },
     c.files.map((f) => {
       const [dir, name] = splitPath(f.path);
       return h(
@@ -1358,6 +1376,7 @@ function shortcutsModal() {
       { class: 'shortcuts' },
       SHORTCUTS.map(([combo, label]) => h('div', { class: 'shortcut' }, h('span', {}, label), h('kbd', {}, keyLabel(combo)))),
       h('div', { class: 'shortcut' }, h('span', {}, 'Move in lists'), h('kbd', {}, '↑ ↓')),
+      h('div', { class: 'shortcut' }, h('span', {}, 'History: go to the commit’s files / back'), h('kbd', {}, '→ ←')),
       h('div', { class: 'shortcut' }, h('span', {}, 'Check / uncheck the selected file'), h('kbd', {}, isMac ? 'Space' : 'Space')),
     ),
   });
@@ -2305,6 +2324,11 @@ function init() {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
         moveSelection(e.key === 'ArrowDown' ? 1 : -1);
+      }
+      if (e.key === 'ArrowRight' && id === '#commit-list') {
+        e.preventDefault();
+        const files = $('#commit-files');
+        if (files?.querySelector('.file-row')) files.focus();
       }
       if (e.key === ' ' && id === '#file-list' && S.selectedPath && e.target === e.currentTarget) {
         e.preventDefault();

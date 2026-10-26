@@ -84,6 +84,7 @@ RemoteGit checks for new versions on its own and shows a popup with **Install an
 | `⌘R` | Refresh |
 | `⌘,` | Settings |
 | `Space` | Check or uncheck the selected file |
+| `→` / `←` | History: move from the commit list to the commit's files and back |
 
 ## Connection requirements
 

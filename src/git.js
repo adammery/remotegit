@@ -180,7 +180,7 @@ export function getCommitFileDiff(exec, repo, sha, file) {
 }
 
 export function parseDiff(text) {
-  const result = { binary: false, notes: [], hunks: [] };
+  const result = { binary: false, notes: [], hunks: [], changes: 0 };
   let hunk = null;
   let o = 0;
   let n = 0;
@@ -201,13 +201,79 @@ export function parseDiff(text) {
       continue;
     }
     const c = line[0];
-    if (c === '+') hunk.lines.push({ t: 'add', text: line.slice(1), n: n++ });
-    else if (c === '-') hunk.lines.push({ t: 'del', text: line.slice(1), o: o++ });
+    if (c === '+') hunk.lines.push({ t: 'add', text: line.slice(1), n: n++, i: result.changes++ });
+    else if (c === '-') hunk.lines.push({ t: 'del', text: line.slice(1), o: o++, i: result.changes++ });
     else if (c === ' ') hunk.lines.push({ t: 'ctx', text: line.slice(1), o: o++, n: n++ });
     else if (c === '\\') hunk.lines.push({ t: 'meta', text: line });
     else if (line.startsWith('diff --git')) hunk = null;
   }
   return result;
+}
+
+/**
+ * Rewrites a one-file diff so it only contains the change lines whose index
+ * (as numbered by parseDiff) is not in `excluded`: an unselected deletion
+ * becomes context, an unselected addition disappears. Returns null when
+ * nothing is selected. The result applies to the index with `git apply --cached`.
+ */
+export function buildPartialPatch(diffText, excluded) {
+  const lines = diffText.split('\n');
+  if (lines[lines.length - 1] === '') lines.pop();
+  const header = [];
+  const hunks = [];
+  let hunk = null;
+  let idx = 0;
+  for (const line of lines) {
+    const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/.exec(line);
+    if (m) {
+      hunk = { oldStart: Number(m[1]), tail: m[3], body: [], oldCount: 0, newCount: 0, selected: 0, lastKept: false };
+      hunks.push(hunk);
+      continue;
+    }
+    if (!hunk) {
+      if (line.startsWith('diff --git') && header.length) break; // one file only
+      header.push(line);
+      continue;
+    }
+    const c = line[0];
+    if (c === ' ') {
+      hunk.body.push(line);
+      hunk.oldCount++;
+      hunk.newCount++;
+      hunk.lastKept = true;
+    } else if (c === '-') {
+      if (excluded.has(idx++)) {
+        hunk.body.push(' ' + line.slice(1));
+        hunk.newCount++;
+      } else {
+        hunk.body.push(line);
+        hunk.selected++;
+      }
+      hunk.oldCount++;
+      hunk.lastKept = true;
+    } else if (c === '+') {
+      if (excluded.has(idx++)) {
+        hunk.lastKept = false;
+        continue;
+      }
+      hunk.selected++;
+      hunk.body.push(line);
+      hunk.newCount++;
+      hunk.lastKept = true;
+    } else if (c === '\\') {
+      if (hunk.lastKept) hunk.body.push(line);
+    }
+  }
+  const out = [];
+  let delta = 0;
+  for (const hk of hunks) {
+    if (!hk.selected) continue;
+    const newStart = hk.newCount === 0 ? hk.oldStart + delta - 1 : hk.oldStart === 0 ? 1 : hk.oldStart + delta;
+    out.push(`@@ -${hk.oldStart},${hk.oldCount} +${Math.max(0, newStart)},${hk.newCount} @@${hk.tail}`, ...hk.body);
+    delta += hk.newCount - hk.oldCount;
+  }
+  if (!out.length) return null;
+  return [...header, ...out].join('\n') + '\n';
 }
 
 // -------------------------------------------------------------- history
@@ -425,7 +491,7 @@ export const cherryPick = (exec, repo, sha, branch) =>
 export async function commit(
   exec,
   repo,
-  { files, all, summary, description = '', coAuthors = [], noVerify = false, signoff = false, allowEmpty = false },
+  { files, all, summary, description = '', coAuthors = [], noVerify = false, signoff = false, allowEmpty = false, patches = [] },
 ) {
   const desc = description.trim();
   const trailers = coAuthors.map((a) => `Co-authored-by: ${a}`).join('\n');
@@ -439,6 +505,8 @@ export async function commit(
       [
         `${GIT} reset -q`,
         all ? `${GIT} add -A` : paths.length ? `${GIT} add -A -- ${paths.join(' ')}` : 'true',
+        // Files with only some lines selected arrive as patches for the index.
+        ...patches.map((patch) => `printf '%s' ${q(patch)} | ${GIT} apply --cached --recount --whitespace=nowarn -`),
         `printf '%s' ${q(message)} | ${GIT} commit -q ${flags} -F -`,
         `${GIT} rev-parse HEAD`,
       ].join(' &&\n'),

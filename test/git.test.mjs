@@ -294,6 +294,48 @@ test('listDir browses folders and marks repositories', async () => {
   assert.equal((await git.listDir(exec, '~')).path, root);
 });
 
+test('partial commits: only the selected lines go in', async () => {
+  const dir = newRepo();
+  const lines = (n, f) => Array.from({ length: n }, (_, i) => f(i + 1)).join('\n') + '\n';
+  writeFileSync(join(dir, 'a.txt'), lines(30, (i) => `line ${i}`));
+  sh(dir, 'git add -A && git commit -qm init');
+  // Two separate hunks: line 2 changed, line 28 changed, plus an added line 29b.
+  writeFileSync(join(dir, 'a.txt'), lines(30, (i) => (i === 2 ? 'TWO' : i === 28 ? 'TWENTY-EIGHT' : i === 29 ? 'line 29\nline 29b' : `line ${i}`)));
+  writeFileSync(join(dir, 'new.txt'), 'keep\ndrop\nkeep too\n');
+  const st = await git.getStatus(exec, dir);
+  const a = st.files.find((f) => f.path === 'a.txt');
+  const n = st.files.find((f) => f.path === 'new.txt');
+
+  const aDiff = (await git.getFileDiff(exec, dir, a, true)).text;
+  const parsed = git.parseDiff(aDiff);
+  assert.equal(parsed.changes, 5); // -2 +2 | -28 +28 +29b
+  // Keep only the first hunk (indexes 0,1): exclude 2,3,4.
+  const aPatch = git.buildPartialPatch(aDiff, new Set([2, 3, 4]));
+  const nDiff = (await git.getFileDiff(exec, dir, n, true)).text;
+  const nPatch = git.buildPartialPatch(nDiff, new Set([1])); // drop "drop"
+  assert.equal(git.buildPartialPatch(nDiff, new Set([0, 1, 2])), null);
+
+  await git.commit(exec, dir, { files: [], all: false, summary: 'Partial', patches: [aPatch, nPatch] });
+  const committedA = sh(dir, 'git show HEAD:a.txt');
+  assert.match(committedA, /^line 1\nTWO\nline 3\n/);
+  assert.match(committedA, /line 28\nline 29\nline 30\n$/);
+  assert.equal(sh(dir, 'git show HEAD:new.txt'), 'keep\nkeep too\n');
+  // The rest stays as uncommitted changes in the working tree.
+  assert.match(readFileSync(join(dir, 'a.txt'), 'utf8'), /TWENTY-EIGHT\nline 29\nline 29b/);
+  const left = (await git.getStatus(exec, dir)).files.map((f) => f.path);
+  assert.deepEqual(left, ['a.txt', 'new.txt']);
+
+  // Excluding a deletion keeps the old line.
+  const d2 = (await git.getFileDiff(exec, dir, (await git.getStatus(exec, dir)).files[0], true)).text;
+  const p2 = git.parseDiff(d2);
+  const del = p2.hunks.flatMap((h) => h.lines).find((l) => l.t === 'del' && l.text === 'line 28');
+  const add = p2.hunks.flatMap((h) => h.lines).find((l) => l.t === 'add' && l.text === 'line 29b');
+  const keepOnly29b = new Set([...Array(p2.changes).keys()].filter((i) => i !== add.i));
+  assert.ok(keepOnly29b.has(del.i));
+  await git.commit(exec, dir, { files: [], all: false, summary: 'Only 29b', patches: [git.buildPartialPatch(d2, keepOnly29b)] });
+  assert.match(sh(dir, 'git show HEAD:a.txt'), /line 28\nline 29\nline 29b\nline 30\n$/);
+});
+
 test('ignorePath appends with a newline guard', async () => {
   const dir = newRepo();
   writeFileSync(join(dir, '.gitignore'), 'node_modules');

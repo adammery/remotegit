@@ -199,6 +199,7 @@ const S = {
   error: null, // { kind: 'conn' | 'git', message }
   tab: 'changes',
   excluded: new Set(),
+  partial: new Map(), // path -> { text, excluded: Set of change-line indexes }
   selectedPath: null,
   filter: '',
   diff: null, // { key, text, truncated }
@@ -224,6 +225,7 @@ function selectRepo(repoId) {
     status: null,
     error: null,
     excluded: new Set(),
+    partial: new Map(),
     selectedPath: null,
     diff: null,
     diffFull: false,
@@ -263,6 +265,7 @@ async function refresh() {
     if (!prev || prev.raw !== st.raw || hadError) {
       const paths = new Set(st.files.map((f) => f.path));
       for (const p of S.excluded) if (!paths.has(p)) S.excluded.delete(p);
+      for (const p of S.partial.keys()) if (!paths.has(p)) S.partial.delete(p);
       const prevSelected = S.selectedPath;
       if (!paths.has(S.selectedPath)) S.selectedPath = st.files[0]?.path || null;
       if (S.selectedPath !== prevSelected) S.diff = null;
@@ -301,6 +304,12 @@ async function refreshDiff() {
     const d = await git.getFileDiff(ex, S.repo.path, file, hasHead());
     if (gen !== S.gen || S.selectedPath !== file.path) return;
     if (S.diff && S.diff.key === key && S.diff.text === d.text) return;
+    const partial = S.partial.get(file.path);
+    if (partial && partial.text !== d.text) {
+      S.partial.delete(file.path);
+      renderChanges();
+      toast(`${file.path} changed on the server, so its line selection was reset.`);
+    }
     S.diff = { key, ...d };
     renderContent();
   } catch (e) {
@@ -436,10 +445,14 @@ async function doCommit(ev) {
   const coAuthors = $('#coauthors').hidden ? [] : git.parseCoAuthors($('#coauthors').value);
   if (coAuthors.includes(null))
     return toast('Write co-authors as @github-login or Name <email>, separated by commas.', 'error', 'Invalid co-author');
+  const partial = files.filter((f) => S.partial.has(f.path));
+  const whole = files.filter((f) => !S.partial.has(f.path));
+  const patches = partial.map((f) => git.buildPartialPatch(S.partial.get(f.path).text, S.partial.get(f.path).excluded)).filter(Boolean);
   await withBusy('Commit', async () => {
     const sha = await git.commit(ex, S.repo.path, {
-      files,
-      all: files.length > 0 && files.length === currentFiles().length,
+      files: whole,
+      patches,
+      all: !partial.length && whole.length > 0 && whole.length === currentFiles().length,
       summary,
       description: $('#description').value,
       coAuthors,
@@ -451,6 +464,7 @@ async function doCommit(ev) {
     $('#coauthors').value = '';
     $('#coauthors').hidden = true;
     S.excluded.clear();
+    S.partial.clear();
     S.history.oid = undefined;
   });
 }
@@ -700,8 +714,11 @@ function fileRow(f) {
     h('input', {
       type: 'checkbox',
       checked: !S.excluded.has(f.path),
+      indeterminate: S.partial.has(f.path),
+      title: S.partial.has(f.path) ? 'Some lines selected' : null,
       onclick: (e) => e.stopPropagation(),
       onchange: (e) => {
+        S.partial.delete(f.path);
         if (e.target.checked) S.excluded.delete(f.path);
         else S.excluded.add(f.path);
         renderChanges();
@@ -783,7 +800,7 @@ function contentView() {
   if (!file) return noChangesView();
   return [
     h('div', { class: 'diff-header' }, h('span', { class: `file-status ${file.kind}`, html: fileIcon(file.kind) }), h('span', { class: 'path' }, ltr(file.orig ? `${file.orig} → ${file.path}` : file.path))),
-    diffView(S.diff),
+    diffView(S.diff, file),
   ];
 }
 
@@ -860,7 +877,66 @@ function noChangesView() {
 
 const DIFF_LINE_CAP = 5000;
 
-function diffView(d) {
+// Change lines left out of the commit for `file`, as indexes from parseDiff.
+function excludedLines(file, text, total) {
+  const entry = S.partial.get(file.path);
+  if (entry && entry.text === text) return entry.excluded;
+  return S.excluded.has(file.path) ? new Set(Array.from({ length: total }, (_, i) => i)) : new Set();
+}
+
+function setLines(file, text, total, indices, include) {
+  const excluded = new Set(excludedLines(file, text, total));
+  for (const i of indices) include ? excluded.delete(i) : excluded.add(i);
+  S.partial.delete(file.path);
+  if (!excluded.size) S.excluded.delete(file.path);
+  else if (excluded.size >= total) S.excluded.add(file.path);
+  else {
+    S.excluded.delete(file.path);
+    S.partial.set(file.path, { text, excluded });
+  }
+  return excluded;
+}
+
+// Click or drag over the gutter to pick lines; click a hunk header for the whole hunk.
+function wireLineSelection(table, file, d, parsed) {
+  const repaint = (excluded) => {
+    for (const row of table.querySelectorAll('.dl[data-i]')) row.classList.toggle('sel', !excluded.has(Number(row.dataset.i)));
+  };
+  let drag = null;
+  const stop = () => {
+    if (!drag) return;
+    drag = null;
+    document.removeEventListener('mouseup', stop);
+    renderChanges();
+    updateCommitButton();
+  };
+  table.addEventListener('mousedown', (e) => {
+    const row = e.target.closest('.dl');
+    if (e.button !== 0 || !row) return;
+    // Hunk headers are clickable anywhere; change lines only in the gutter, so text stays selectable.
+    if (row.dataset.hunk == null && !e.target.closest('.selcol, .ln, .sign')) return;
+    e.preventDefault();
+    if (row.dataset.hunk != null) {
+      const idx = parsed.hunks[Number(row.dataset.hunk)].lines.filter((l) => l.i != null).map((l) => l.i);
+      const current = excludedLines(file, d.text, parsed.changes);
+      repaint(setLines(file, d.text, parsed.changes, idx, idx.some((i) => current.has(i))));
+      renderChanges();
+      updateCommitButton();
+      return;
+    }
+    if (row.dataset.i == null) return;
+    const i = Number(row.dataset.i);
+    drag = { include: excludedLines(file, d.text, parsed.changes).has(i) };
+    repaint(setLines(file, d.text, parsed.changes, [i], drag.include));
+    document.addEventListener('mouseup', stop);
+  });
+  table.addEventListener('mouseover', (e) => {
+    const row = drag && e.target.closest('.dl[data-i]');
+    if (row) repaint(setLines(file, d.text, parsed.changes, [Number(row.dataset.i)], drag.include));
+  });
+}
+
+function diffView(d, file) {
   if (!d) return h('div', { class: 'diff' }, h('div', { class: 'diff-notice' }, 'Loading diff…'));
   if (d.error) return h('div', { class: 'diff' }, h('div', { class: 'diff-notice' }, h('div', { class: 'error-box' }, d.error)));
   const parsed = git.parseDiff(d.text);
@@ -868,20 +944,36 @@ function diffView(d) {
   if (!parsed.hunks.length)
     return h('div', { class: 'diff' }, h('div', { class: 'diff-notice' }, parsed.notes.length ? parsed.notes.join('\n') : 'No content changes (empty file).'));
 
+  // Line picking works for edited and new files; renames and deletions go in whole.
+  const selectable = !!file && (file.kind === 'modified' || file.kind === 'new') && !d.truncated && parsed.changes > 0;
+  const excluded = selectable ? excludedLines(file, d.text, parsed.changes) : null;
   const total = parsed.hunks.reduce((n, hk) => n + hk.lines.length + 1, 0);
   const cap = S.diffFull ? Infinity : DIFF_LINE_CAP;
   const frag = document.createDocumentFragment();
+  const sel = () => selectable && h('span', { class: 'selcol' });
   let count = 0;
-  outer: for (const hk of parsed.hunks) {
-    frag.append(h('div', { class: 'dl hunk' }, h('span', { class: 'ln' }), h('span', { class: 'ln' }), h('span', { class: 'code' }, hk.header)));
+  outer: for (const [hi, hk] of parsed.hunks.entries()) {
+    frag.append(
+      h('div', { class: 'dl hunk', dataset: selectable ? { hunk: hi } : null, title: selectable ? 'Click to include or leave out this whole block' : null }, sel(), h('span', { class: 'ln' }), h('span', { class: 'ln' }), h('span', { class: 'sign' }), h('span', { class: 'code' }, hk.header)),
+    );
     for (const l of hk.lines) {
       if (++count > cap) break outer;
+      const change = l.i != null;
       frag.append(
-        h('div', { class: `dl ${l.t}` }, h('span', { class: 'ln' }, l.o ?? ''), h('span', { class: 'ln' }, l.n ?? ''), h('span', { class: 'code' }, l.text || ' ')),
+        h(
+          'div',
+          { class: `dl ${l.t}` + (selectable && change && !excluded.has(l.i) ? ' sel' : ''), dataset: selectable && change ? { i: l.i } : null },
+          sel(),
+          h('span', { class: 'ln' }, l.o ?? ''),
+          h('span', { class: 'ln' }, l.n ?? ''),
+          h('span', { class: 'sign' }, l.t === 'add' ? '+' : l.t === 'del' ? '-' : ''),
+          h('span', { class: 'code' }, l.text || ' '),
+        ),
       );
     }
   }
-  const table = h('div', { class: 'diff-table' }, frag);
+  const table = h('div', { class: 'diff-table' + (selectable ? ' selectable' : '') }, frag);
+  if (selectable) wireLineSelection(table, file, d, parsed);
   const extras = [];
   if (count > cap)
     extras.push(h('div', { class: 'diff-notice' }, `Showing ${cap} of ${total} lines.`, h('br'), h('button', { class: 'btn', type: 'button', onclick: () => { S.diffFull = true; renderContent(); } }, 'Show the whole diff')));

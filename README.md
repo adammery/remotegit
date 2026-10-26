@@ -1,102 +1,101 @@
 # RemoteGit
 
-Git klient v štýle GitHub Desktop pre repozitáre, ktoré sú **na serveri**. Pripája sa cez SSH, takže kód zostáva na serveri a na svojom Macu alebo Windowse vidíš zmeny, diffy, históriu, vetvy a robíš commit, push aj pull.
+A GitHub Desktop-style Git client for repositories that live **on a server**. It connects over SSH, so the code stays on the server while you see changes, diffs, history and branches, and commit, push and pull from your Mac or Windows PC.
 
 ![Changes](docs/screenshot.png)
 ![History](docs/history.png)
 
-## Ako to funguje
+## How it works
 
-- Appka používa SSH klienta, ktorý je už v systéme (`ssh` na macOS, OpenSSH na Windows 10/11). Fungujú tvoje kľúče, ssh-agent aj `~/.ssh/config`.
-- Na každý server sa otvorí **jedno trvalé SSH spojenie** a cezň idú všetky git príkazy. Obnovenie stavu je potom len jeden rýchly príkaz, nie nové prihlásenie.
-- Na serveri netreba nič inštalovať, stačí `git` a `sh`.
-- Kým je okno viditeľné, stav sa obnovuje každé 3 s. Zmeny, ktoré na serveri urobíš inde (vo VS Code alebo vo vim), sa v appke objavia samy. Keď je okno skryté, appka nič nerobí.
-- Appka je postavená na Tauri, takže inštalátor má pár MB a spotreba RAM je nízka.
+- Uses the SSH client already on your system (`ssh` on macOS, OpenSSH on Windows 10/11), so your keys, ssh-agent and `~/.ssh/config` just work.
+- Keeps **one persistent SSH connection** per server and sends every git command through it, so a refresh is one quick command, not a new login.
+- Nothing to install on the server besides `git` and `sh`.
+- While the window is visible, status refreshes every 3 s. Changes made elsewhere on the server (VS Code, vim, …) show up on their own. When the window is hidden, the app does nothing.
+- Built with Tauri, so the installer is a few MB and memory use is low.
 
-## Funkcie
+## Features
 
-- **Changes:** zoznam zmenených súborov so zaškrtávaním, diff s číslami riadkov a commit len zaškrtnutých súborov (summary + description) s tlačidlom **Undo**.
-- **History:** zoznam commitov (nepushnuté majú šípku ↑), detail commitu, zoznam súborov a diff.
-- **Vetvy:** prepínanie, vytvorenie novej vetvy a checkout vetvy z remote.
-- **Fetch / Pull / Push / Publish branch** jedným tlačidlom, ako v GitHub Desktop. Pravým klikom na tlačidlo vyberieš konkrétnu akciu.
-- Pravý klik na súbor ponúka Discard changes, pridanie do `.gitignore` a skopírovanie cesty.
-- Viac serverov a viac repozitárov. Repá sa dajú na serveri vyhľadať automaticky (v `~`, `/var/www`, `/srv`).
-- „Open in VS Code“ otvorí repo cez Remote-SSH. „Copy SSH command“ skopíruje príkaz na terminál priamo v priečinku repa.
-- Svetlý aj tmavý režim podľa systému.
+- **Changes:** changed files with checkboxes, a diff with line numbers, and a commit of only the checked files (summary + description) with **Undo**.
+- **History:** list of commits (unpushed ones have an ↑ arrow), commit details, changed files and diff.
+- **Branches:** switch, create, and check out remote branches.
+- **Fetch / Pull / Push / Publish branch** in one button, like GitHub Desktop. Right-click the button to pick a specific action.
+- Right-click a file to discard changes, add it to `.gitignore`, or copy its path.
+- Multiple servers and repositories. Repositories can be found on the server automatically (in `~`, `/var/www`, `/srv`).
+- "Open in VS Code" opens the repo through Remote-SSH. "Copy SSH command" copies a command that opens a terminal in the repo folder.
+- Light and dark mode, following the system.
 
-Skratky: `⌘/Ctrl+Enter` commit · `⌘/Ctrl+1` / `2` Changes / History · `⌘/Ctrl+T` výber repa · `⌘/Ctrl+B` vetvy · `⌘/Ctrl+R` obnoviť · šípky ↑/↓ v zoznamoch.
+Shortcuts: `⌘/Ctrl+Enter` commit · `⌘/Ctrl+1` / `2` Changes / History · `⌘/Ctrl+T` repository picker · `⌘/Ctrl+B` branches · `⌘/Ctrl+R` refresh · ↑/↓ arrows in lists.
 
-## Požiadavky na pripojenie
+## Connection requirements
 
-RemoteGit sa prihlasuje **SSH kľúčom**, heslo nevypĺňa. Ak `ssh user@server` v termináli funguje bez pýtania hesla, bude fungovať aj appka. Ak nie:
+RemoteGit signs in with an **SSH key**; it never fills in passwords. If `ssh user@server` works in a terminal without asking for a password, the app will work too. If not:
 
 ```bash
-ssh-keygen -t ed25519        # ak ešte nemáš kľúč
-ssh-copy-id user@server      # nahrá kľúč na server
+ssh-keygen -t ed25519        # if you don't have a key yet
+ssh-copy-id user@server      # uploads the key to the server
 ```
 
-Na Windows (PowerShell), kde `ssh-copy-id` nie je:
+On Windows (PowerShell), where `ssh-copy-id` isn't available:
 
 ```powershell
 type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh user@server "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
 ```
 
-**Push na GitHub zo servera:** buď má server vlastný SSH kľúč pridaný v GitHube, alebo v nastaveniach servera v appke zapni **Forward my SSH agent** a server potom použije kľúče z tvojho počítača.
+**Pushing to GitHub from the server:** either the server has its own SSH key added to GitHub, or turn on **Forward my SSH agent** in the app's server settings so the server uses the keys from your computer.
 
 ## Build
 
-### A) Automaticky cez GitHub Actions (najjednoduchšie)
+### A) Automatically with GitHub Actions (easiest)
 
-1. Nahraj projekt do GitHub repozitára.
-2. Otvor **Actions → Build → Run workflow**.
-3. Po dobehnutí (cca 10 min) stiahneš v sekcii *Artifacts*:
-   - `RemoteGit-macOS` → `.dmg` (univerzálny, Apple Silicon aj Intel)
-   - `RemoteGit-Windows` → `.msi` a `.exe` inštalátor
+1. Open **Actions → Build → Run workflow**.
+2. When it finishes (about 10 minutes), download from *Artifacts*:
+   - `RemoteGit-macOS` → `.dmg` (universal: Apple Silicon and Intel)
+   - `RemoteGit-Windows` → `.msi` and `.exe` installers
 
-Keď pushneš tag (`git tag v0.1.0 && git push --tags`), vytvorí sa aj draft GitHub Release s inštalátormi.
+Pushing a tag (`git tag v0.1.0 && git push --tags`) also creates a draft GitHub Release with the installers.
 
-### B) Lokálne
+### B) Locally
 
 **macOS:**
 ```bash
-xcode-select --install                                   # raz
-curl https://sh.rustup.rs -sSf | sh                       # raz, Rust
+xcode-select --install                                   # once
+curl https://sh.rustup.rs -sSf | sh                       # once, installs Rust
 npm ci
 npm run build
 # → src-tauri/target/release/bundle/dmg/RemoteGit_0.1.0_aarch64.dmg
 ```
 
-**Windows:** nainštaluj [Rust](https://rustup.rs), [Node.js](https://nodejs.org) a *Visual Studio Build Tools* (workload „Desktop development with C++“). Potom:
+**Windows:** install [Rust](https://rustup.rs), [Node.js](https://nodejs.org) and *Visual Studio Build Tools* (the "Desktop development with C++" workload). Then:
 ```powershell
 npm ci
 npm run build
-# → src-tauri\target\release\bundle\msi\  a  \nsis\
+# → src-tauri\target\release\bundle\msi\  and  \nsis\
 ```
 
-### Prvé spustenie (appka nie je podpísaná)
+### First launch (the app is not signed)
 
-- **macOS:** pri prvom otvorení vyskočí varovanie. Choď do *System Settings → Privacy & Security* a klikni **Open Anyway**. Alebo v termináli spusti `xattr -cr /Applications/RemoteGit.app`.
+- **macOS:** a warning appears the first time you open it. Go to *System Settings → Privacy & Security* and click **Open Anyway**, or run `xattr -cr /Applications/RemoteGit.app` in a terminal.
 - **Windows:** SmartScreen → **More info → Run anyway**.
 
-## Vývoj
+## Development
 
 ```bash
-npm run dev        # Tauri appka s okamžitým reloadom UI
-npm run preview    # UI v prehliadači na http://localhost:1420, príkazy idú do lokálneho sh namiesto SSH
-npm test           # testy git logiky proti skutočným repám
-cd src-tauri && cargo test   # testy SSH vrstvy
+npm run dev        # Tauri app with live UI reload
+npm run preview    # UI in the browser at http://localhost:1420; commands run in a local sh instead of over SSH
+npm test           # git logic tests against real repositories
+cd src-tauri && cargo test   # SSH layer tests
 ```
 
-Štruktúra:
+Layout:
 
-| Súbor | Čo robí |
+| File | What it does |
 |---|---|
-| `src-tauri/src/ssh.rs` | trvalé SSH spojenie, oddeľovanie výstupov príkazov |
-| `src-tauri/src/main.rs` | Tauri príkazy `ssh_connect`, `ssh_exec`, `ssh_disconnect` |
-| `src/git.js` | git príkazy (bezpečne escapované) a parsery ich výstupu |
-| `src/app.js` | UI (čistý JavaScript bez frameworku a bez build kroku) |
-| `src/styles.css` | vzhľad, svetlý a tmavý režim |
+| `src-tauri/src/ssh.rs` | persistent SSH connection, framing of each command's output |
+| `src-tauri/src/main.rs` | Tauri commands `ssh_connect`, `ssh_exec`, `ssh_disconnect` |
+| `src/git.js` | git commands (safely escaped) and parsers for their output |
+| `src/app.js` | UI (plain JavaScript, no framework, no build step) |
+| `src/styles.css` | styling, light and dark mode |
 
-## Zatiaľ nepodporované
+## Not supported yet
 
-Prihlásenie heslom (len kľúče), riešenie merge konfliktov priamo v appke (konflikty sa zobrazia, vyriešiš ich v editore a potom commitneš), stash, diff obrázkov, podpisovanie commitov s heslom ku kľúču.
+Password login (keys only), resolving merge conflicts inside the app (conflicts are shown; resolve them in an editor, then commit), stash, image diffs, signing commits with a passphrase-protected key.

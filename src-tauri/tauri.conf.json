@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "RemoteGit",
-  "version": "0.2.0",
-  "identifier": "sk.vocalio.remotegit",
+  "version": "0.2.1",
+  "identifier": "io.github.adammery.remotegit",
   "build": {
     "frontendDist": "../src"
   },

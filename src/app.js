@@ -13,7 +13,6 @@ const store = Object.assign(
     currentRepoId: null,
     serverFilter: null,
     sidebarWidth: 300,
-    pollSeconds: 3,
     theme: 'system',
     commitOpts: { noVerify: false, signoff: false, allowEmpty: false },
   },
@@ -322,10 +321,12 @@ async function refreshDiff() {
   }
 }
 
+// One `git status` over the open SSH connection: ~1.5 KB and a few ms on the server.
+const POLL_SECONDS = 3;
 let pollTimer = null;
 function schedulePoll() {
   clearTimeout(pollTimer);
-  const secs = S.error?.kind === 'conn' ? 15 : store.pollSeconds;
+  const secs = S.error?.kind === 'conn' ? 15 : POLL_SECONDS;
   pollTimer = setTimeout(async () => {
     if (document.visibilityState === 'visible' && !S.busy) await refresh();
     schedulePoll();
@@ -1273,8 +1274,6 @@ function settingsPopover() {
           { class: 'settings' },
           h('div', { class: 'settings-label' }, 'Appearance'),
           seg([['system', 'System'], ['light', 'Light'], ['dark', 'Dark']], store.theme || 'system', (v) => { store.theme = v; save(); applyTheme(); fill(); }),
-          h('div', { class: 'settings-label' }, 'Refresh changes every'),
-          seg([[2, '2 s'], [3, '3 s'], [5, '5 s'], [10, '10 s']], store.pollSeconds, (v) => { store.pollSeconds = v; save(); schedulePoll(); fill(); }),
           h('div', { class: 'settings-label' }, isMac ? 'Menu bar' : 'System tray'),
           h(
             'label',

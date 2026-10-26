@@ -143,7 +143,7 @@ svg { display: block; flex: none; }
 /* ------------------------------------------------------------ toolbar */
 .toolbar {
   display: flex;
-  height: 50px;
+  height: 54px;
   flex: none;
   background: var(--toolbar-bg);
   color: var(--toolbar-text);

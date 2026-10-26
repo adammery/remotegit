@@ -676,3 +676,5 @@ kbd { font: 12px var(--mono); padding: 1px 6px; border: 1px solid var(--border);
 .merge-list { height: 260px; }
 .browser-row.picked { background: var(--selected); font-weight: 600; }
 .pop-foot .btn-block b { margin-left: 3px; }
+
+.settings-check { font-size: 12px; padding: 4px 0; }

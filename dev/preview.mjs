@@ -67,6 +67,9 @@ const handlers = {
   },
   ssh_exec: ({ script, timeoutSecs }) => sh(script, timeoutSecs || 60),
   ssh_disconnect: () => null,
+  show_main_window: () => null,
+  set_tray_status: ({ title }) => (console.log('[preview] tray title', JSON.stringify(title)), null),
+  set_menu_bar_only: () => null,
 };
 
 createServer(async (req, res) => {
@@ -87,7 +90,7 @@ createServer(async (req, res) => {
     const file = join(root, path === '/' ? 'index.html' : path);
     if (!file.startsWith(root)) return res.writeHead(403).end();
     let data = await readFile(file);
-    if (file.endsWith('index.html')) data = data.toString().replace('<script type="module"', `${shim}\n    <script type="module"`);
+    if (file.endsWith('.html')) data = data.toString().replace('<script type="module"', `${shim}\n    <script type="module"`);
     res.writeHead(200, { 'content-type': types[extname(file)] || 'application/octet-stream' }).end(data);
   } catch {
     res.writeHead(404).end('Not found');

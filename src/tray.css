@@ -1,0 +1,81 @@
+/* The small window under the menu bar / tray icon. Colors come from styles.css. */
+
+.tray-body { background: var(--sidebar-bg); overflow: hidden; }
+.tray { display: flex; flex-direction: column; height: 100vh; }
+
+.tray-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  background: var(--toolbar-bg);
+  color: var(--toolbar-text);
+  border-bottom: 1px solid var(--toolbar-border);
+  flex: none;
+}
+.tray-head .btn-icon { color: var(--toolbar-muted); }
+.tray-head .btn-icon:hover { background: var(--toolbar-hover); color: var(--toolbar-text); }
+.tray-repo {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+.tray-repo:hover, .tray-repo.open { background: var(--toolbar-hover); }
+.tray-repo .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.tray-repo .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tray-repo .where { font-size: 11px; color: var(--toolbar-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.tray-picker { flex: 1; overflow-y: auto; }
+.tray-picker .pop-group { padding-top: 10px; }
+
+.tray-branch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.tray-branch .name { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tray-branch .btn { height: 26px; padding: 0 10px; }
+.tray-branch .count { display: inline-flex; align-items: center; gap: 1px; padding: 0 6px; border-radius: 9px; background: var(--panel); font-size: 11px; font-weight: 600; }
+.tray-branch .count svg { width: 12px; height: 12px; }
+
+.tray-files { flex: 1; min-height: 0; overflow-y: auto; }
+.tray-files .files-title { padding: 8px 10px 4px; color: var(--muted); font-size: 12px; font-weight: 600; }
+.tray-files .file-row { height: 28px; cursor: default; }
+.tray-files .list-note { padding: 6px 10px; }
+.tray-clean { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; height: 100%; color: var(--muted); text-align: center; padding: 20px; }
+.tray-clean b { color: var(--text); font-size: 14px; }
+
+.tray-commit { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-top: 1px solid var(--border); flex: none; }
+.tray-commit .input-row input { flex: 1; }
+.tray-commit .check { font-size: 12px; color: var(--muted); align-items: center; }
+.tray-commit .check input { margin: 0; }
+
+.tray-last { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-top: 1px solid var(--row-border); flex: none; }
+.tray-last .grow { flex: 1; min-width: 0; }
+
+.tray-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 12px;
+  flex: none;
+}
+.tray-foot .check { flex: 1; align-items: center; color: var(--muted); }
+.tray-foot .check input { margin: 0; }
+
+.tray-error { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.tray-error .error-box { margin: 0; }

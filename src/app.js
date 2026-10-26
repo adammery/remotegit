@@ -1170,6 +1170,22 @@ function applyTheme() {
   } catch {}
 }
 
+// Shared with the tray window, which has the same switch.
+const TRAY_KEY = 'remotegit:tray';
+function trayPrefs() {
+  try {
+    return JSON.parse(localStorage.getItem(TRAY_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+function setMenuBarOnly(enabled) {
+  try {
+    localStorage.setItem(TRAY_KEY, JSON.stringify({ ...trayPrefs(), menuBarOnly: enabled }));
+  } catch {}
+  tauri.core.invoke('set_menu_bar_only', { enabled }).catch(() => {});
+}
+
 function settingsPopover() {
   openPopover($('#tb-settings'), (el) => {
     const seg = (options, value, onPick) =>
@@ -1183,6 +1199,12 @@ function settingsPopover() {
           seg([['system', 'System'], ['light', 'Light'], ['dark', 'Dark']], store.theme || 'system', (v) => { store.theme = v; save(); applyTheme(); fill(); }),
           h('div', { class: 'settings-label' }, 'Refresh changes every'),
           seg([[2, '2 s'], [3, '3 s'], [5, '5 s'], [10, '10 s']], store.pollSeconds, (v) => { store.pollSeconds = v; save(); schedulePoll(); fill(); }),
+          h(
+            'label',
+            { class: 'check settings-check' },
+            h('input', { type: 'checkbox', checked: !!trayPrefs().menuBarOnly, onchange: (e) => setMenuBarOnly(e.target.checked) }),
+            h('span', {}, h('b', {}, 'Menu bar only'), h('br'), h('span', { class: 'hint' }, isMac ? 'Hide RemoteGit from the Dock. Click its icon in the menu bar to open it.' : 'Hide RemoteGit from the taskbar. Click its icon in the system tray to open it.')),
+          ),
           h('button', { class: 'btn btn-block', type: 'button', onclick: () => { closePopover(); shortcutsModal(); } }, 'Keyboard shortcuts'),
         ),
       );
@@ -2011,6 +2033,13 @@ function init() {
   $('#ai-btn').addEventListener('click', generateMessage);
   applyTheme();
   renderCommitFlags();
+  if (trayPrefs().menuBarOnly) {
+    // Start straight in the menu bar; the tray icon brings the window back.
+    tauri.core.invoke('set_menu_bar_only', { enabled: true }).catch(() => {});
+    try {
+      tauri.window?.getCurrentWindow?.().hide();
+    } catch {}
+  }
   $('#tb-branch').addEventListener('click', () => branchPopover());
   $('#tb-sync').addEventListener('click', () => runSync());
   const syncMenu = (x, y) => {

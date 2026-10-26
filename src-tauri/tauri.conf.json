@@ -16,6 +16,19 @@
         "height": 760,
         "minWidth": 820,
         "minHeight": 520
+      },
+      {
+        "label": "tray",
+        "url": "tray.html",
+        "title": "RemoteGit",
+        "width": 360,
+        "height": 520,
+        "visible": false,
+        "decorations": false,
+        "resizable": false,
+        "skipTaskbar": true,
+        "alwaysOnTop": true,
+        "focus": true
       }
     ],
     "security": {
@@ -24,7 +37,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["dmg", "app", "msi", "nsis"],
+    "targets": [
+      "dmg",
+      "app",
+      "msi",
+      "nsis"
+    ],
     "category": "DeveloperTool",
     "shortDescription": "Git client for repositories on SSH servers",
     "icon": [

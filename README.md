@@ -141,4 +141,4 @@ Password login (keys only), resolving merge conflicts inside the app (conflicts 
 
 ## Credits
 
-Icons are [Octicons](https://primer.style/octicons) by GitHub Inc., used under the MIT License. RemoteGit is not affiliated with or endorsed by GitHub.
+Icons are [Octicons](https://primer.style/octicons) by GitHub Inc., used under the MIT License. Syntax highlighting uses [highlight.js](https://highlightjs.org) (BSD-3-Clause, see `src/vendor/highlight.js-LICENSE`). RemoteGit is not affiliated with or endorsed by GitHub.

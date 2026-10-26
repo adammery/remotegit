@@ -974,7 +974,65 @@ function wireLineSelection(table, file, d, parsed) {
   });
 }
 
-function diffView(d, file) {
+// File name -> highlight.js language, or null when we have no grammar for it.
+function languageFor(path) {
+  const hljs = window.hljs;
+  if (!hljs || !path) return null;
+  const name = path.split('/').pop().toLowerCase();
+  if (name === 'dockerfile' || name.startsWith('dockerfile.')) return 'dockerfile';
+  if (name === 'makefile') return 'makefile';
+  const ext = name.includes('.') ? name.split('.').pop() : '';
+  const lang = { vue: 'xml', svelte: 'xml', htm: 'xml', svg: 'xml', env: 'ini', conf: 'ini', cjs: 'javascript', mjs: 'javascript', lock: null }[ext] ?? ext;
+  return lang && hljs.getLanguage(lang) ? lang : null;
+}
+
+// Highlights lines as one block (so strings and comments spanning lines come
+// out right), then splits the HTML back into lines, closing and reopening any
+// span that crosses a line break. highlight.js escapes the text it returns.
+function highlightLines(lines, lang) {
+  let html;
+  try {
+    html = window.hljs.highlight(lines.join('\n'), { language: lang, ignoreIllegals: true }).value;
+  } catch {
+    return null;
+  }
+  const out = [];
+  const open = [];
+  let cur = '';
+  for (const tok of html.split(/(<span[^>]*>|<\/span>|\n)/)) {
+    if (!tok) continue;
+    if (tok === '\n') {
+      out.push(cur + '</span>'.repeat(open.length));
+      cur = open.join('');
+    } else if (tok.startsWith('<span')) {
+      open.push(tok);
+      cur += tok;
+    } else if (tok === '</span>') {
+      open.pop();
+      cur += tok;
+    } else cur += tok;
+  }
+  out.push(cur + '</span>'.repeat(open.length));
+  return out.length === lines.length ? out : null;
+}
+
+// The new side (context + additions) and old side (context + deletions) of a
+// hunk are each valid code, so each is highlighted on its own.
+function highlightHunk(hk, lang) {
+  if (!lang) return null;
+  const newSide = hk.lines.filter((l) => l.t === 'ctx' || l.t === 'add');
+  const oldSide = hk.lines.filter((l) => l.t === 'ctx' || l.t === 'del');
+  if (hk.lines.some((l) => l.text.length > 1000)) return null; // minified files: skip
+  const nh = highlightLines(newSide.map((l) => l.text), lang);
+  const oh = oldSide.some((l) => l.t === 'del') ? highlightLines(oldSide.map((l) => l.text), lang) : [];
+  if (!nh || !oh) return null;
+  const map = new Map();
+  newSide.forEach((l, i) => map.set(l, nh[i]));
+  oldSide.forEach((l, i) => l.t === 'del' && map.set(l, oh[i]));
+  return map;
+}
+
+function diffView(d, file, path = file?.path) {
   if (!d) return h('div', { class: 'diff' }, h('div', { class: 'diff-notice' }, 'Loading diff…'));
   if (d.error) return h('div', { class: 'diff' }, h('div', { class: 'diff-notice' }, h('div', { class: 'error-box' }, d.error)));
   const parsed = git.parseDiff(d.text);
@@ -989,8 +1047,10 @@ function diffView(d, file) {
   const cap = S.diffFull ? Infinity : DIFF_LINE_CAP;
   const frag = document.createDocumentFragment();
   const sel = () => selectable && h('span', { class: 'selcol' });
+  const lang = d.text.length < 400_000 ? languageFor(path) : null;
   let count = 0;
   outer: for (const [hi, hk] of parsed.hunks.entries()) {
+    const colored = highlightHunk(hk, lang);
     frag.append(
       h('div', { class: 'dl hunk', dataset: selectable ? { hunk: hi } : null, title: selectable ? 'Click to include or leave out this whole block' : null }, sel(), h('span', { class: 'ln' }), h('span', { class: 'ln' }), h('span', { class: 'sign' }), h('span', { class: 'code' }, hk.header)),
     );
@@ -1005,7 +1065,7 @@ function diffView(d, file) {
           h('span', { class: 'ln' }, l.o ?? ''),
           h('span', { class: 'ln' }, l.n ?? ''),
           h('span', { class: 'sign' }, l.t === 'add' ? '+' : l.t === 'del' ? '-' : ''),
-          h('span', { class: 'code' }, l.text || ' '),
+          colored?.has(l) ? h('span', { class: 'code', html: colored.get(l) || ' ' }) : h('span', { class: 'code' }, l.text || ' '),
         ),
       );
     }
@@ -1058,7 +1118,7 @@ function historyView() {
       );
     }),
   );
-  const diffCol = h('div', { class: 'diff-col' }, S.commitFile ? diffView(S.commitDiff) : h('div', { class: 'diff-notice' }, 'No file changes in this commit.'));
+  const diffCol = h('div', { class: 'diff-col' }, S.commitFile ? diffView(S.commitDiff, null, S.commitFile.path) : h('div', { class: 'diff-notice' }, 'No file changes in this commit.'));
   return [head, h('div', { class: 'split' }, files, diffCol)];
 }
 

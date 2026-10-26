@@ -36,6 +36,13 @@
   --diff-del-gutter: #ffd7d5;
   --diff-hunk-bg: #f1f8ff;
   --diff-hunk-text: #586069;
+  --syn-keyword: #cf222e;
+  --syn-title: #8250df;
+  --syn-constant: #0550ae;
+  --syn-string: #0a3069;
+  --syn-builtin: #953800;
+  --syn-comment: #6e7781;
+  --syn-tag: #116329;
   --shadow: 0 8px 24px rgba(27, 31, 35, 0.18);
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Helvetica, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
@@ -45,24 +52,24 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --toolbar-bg: #161a1f;
-    --toolbar-hover: #262c33;
-    --toolbar-active: #2d343c;
+    --toolbar-bg: #1c2025;
+    --toolbar-hover: #2d333a;
+    --toolbar-active: #343b43;
     --toolbar-border: #080a0c;
     --toolbar-text: #ffffff;
     --toolbar-muted: #b1bac4;
-    --bg: #24292e;
-    --sidebar-bg: #24292e;
-    --panel: #2f363d;
-    --border: #3d444d;
-    --row-border: #31383f;
+    --bg: #2b3036;
+    --sidebar-bg: #2b3036;
+    --panel: #363d45;
+    --border: #464d56;
+    --row-border: #383f47;
     --text: #f0f3f6;
     --muted: #a7b0ba;
-    --hover: #2c3238;
-    --selected: #33445a;
+    --hover: #333940;
+    --selected: #3a4b61;
     --selected-focus: #1f6feb;
     --checkbox-border: #7d8590;
-    --input-bg: #1b1f24;
+    --input-bg: #22272c;
     --input-border: #4a525c;
     --accent: #4493f8;
     --primary: #1f6feb;
@@ -77,31 +84,38 @@
     --diff-add-gutter: #174f23;
     --diff-del-bg: #450d10;
     --diff-del-gutter: #5a1216;
-    --diff-hunk-bg: #1c2533;
+    --diff-hunk-bg: #232c3a;
     --diff-hunk-text: #b1bac4;
+    --syn-keyword: #ff7b72;
+    --syn-title: #d2a8ff;
+    --syn-constant: #79c0ff;
+    --syn-string: #a5d6ff;
+    --syn-builtin: #ffa657;
+    --syn-comment: #8b949e;
+    --syn-tag: #7ee787;
     --shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
   }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --toolbar-bg: #161a1f;
-  --toolbar-hover: #262c33;
-  --toolbar-active: #2d343c;
+  --toolbar-bg: #1c2025;
+  --toolbar-hover: #2d333a;
+  --toolbar-active: #343b43;
   --toolbar-border: #080a0c;
   --toolbar-text: #ffffff;
   --toolbar-muted: #b1bac4;
-  --bg: #24292e;
-  --sidebar-bg: #24292e;
-  --panel: #2f363d;
-  --border: #3d444d;
-  --row-border: #31383f;
+  --bg: #2b3036;
+  --sidebar-bg: #2b3036;
+  --panel: #363d45;
+  --border: #464d56;
+  --row-border: #383f47;
   --text: #f0f3f6;
   --muted: #a7b0ba;
-  --hover: #2c3238;
-  --selected: #33445a;
+  --hover: #333940;
+  --selected: #3a4b61;
   --selected-focus: #1f6feb;
   --checkbox-border: #7d8590;
-  --input-bg: #1b1f24;
+  --input-bg: #22272c;
   --input-border: #4a525c;
   --accent: #4493f8;
   --primary: #1f6feb;
@@ -116,8 +130,15 @@
   --diff-add-gutter: #174f23;
   --diff-del-bg: #450d10;
   --diff-del-gutter: #5a1216;
-  --diff-hunk-bg: #1c2533;
+  --diff-hunk-bg: #232c3a;
   --diff-hunk-text: #b1bac4;
+  --syn-keyword: #ff7b72;
+  --syn-title: #d2a8ff;
+  --syn-constant: #79c0ff;
+  --syn-string: #a5d6ff;
+  --syn-builtin: #ffa657;
+  --syn-comment: #8b949e;
+  --syn-tag: #7ee787;
   --shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
 }
 
@@ -680,3 +701,18 @@ kbd { font: 12px var(--mono); padding: 1px 6px; border: 1px solid var(--border);
 .settings-check { font-size: 12px; padding: 4px 0; }
 .settings-check.off { opacity: 0.5; }
 .field-stack { display: flex; flex-direction: column; gap: 12px; }
+
+/* ------------------------------------------------------------ syntax highlighting (GitHub's colors) */
+.dl .code .hljs-keyword, .dl .code .hljs-doctag, .dl .code .hljs-template-tag, .dl .code .hljs-template-variable,
+.dl .code .hljs-type, .dl .code .hljs-variable.language_, .dl .code .hljs-meta .hljs-keyword { color: var(--syn-keyword); }
+.dl .code .hljs-title, .dl .code .hljs-title.class_, .dl .code .hljs-title.function_ { color: var(--syn-title); }
+.dl .code .hljs-attr, .dl .code .hljs-attribute, .dl .code .hljs-literal, .dl .code .hljs-meta, .dl .code .hljs-number,
+.dl .code .hljs-operator, .dl .code .hljs-variable, .dl .code .hljs-selector-attr, .dl .code .hljs-selector-class,
+.dl .code .hljs-selector-id { color: var(--syn-constant); }
+.dl .code .hljs-regexp, .dl .code .hljs-string, .dl .code .hljs-meta .hljs-string { color: var(--syn-string); }
+.dl .code .hljs-built_in, .dl .code .hljs-symbol, .dl .code .hljs-bullet { color: var(--syn-builtin); }
+.dl .code .hljs-comment, .dl .code .hljs-code, .dl .code .hljs-formula { color: var(--syn-comment); }
+.dl .code .hljs-name, .dl .code .hljs-quote, .dl .code .hljs-selector-tag, .dl .code .hljs-selector-pseudo { color: var(--syn-tag); }
+.dl .code .hljs-section { color: var(--syn-constant); font-weight: 600; }
+.dl .code .hljs-emphasis { font-style: italic; }
+.dl .code .hljs-strong { font-weight: 600; }

@@ -4,6 +4,12 @@ A GitHub Desktop-style Git client for repositories that live **on a server**. It
 
 ![Changes](docs/screenshot.png)
 
+## Download
+
+Get the latest version from **[Releases](https://github.com/adammery/remotegit/releases/latest)**: the `.dmg` for macOS (Apple Silicon and Intel) or the `-setup.exe` for Windows.
+
+RemoteGit checks for new versions on its own and shows a popup with **Install and restart**. You can also check by hand in ⚙ → *Check for updates*, where the current version is shown. Updates are signed, and the app only installs ones signed with the project's key.
+
 ## How it works
 
 - Uses the SSH client already on your system (`ssh` on macOS, OpenSSH on Windows 10/11), so your keys, ssh-agent and `~/.ssh/config` just work.
@@ -101,7 +107,13 @@ type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh user@server "mkdir -p ~/.ssh && 
    - `RemoteGit-macOS` → `.dmg` (universal: Apple Silicon and Intel)
    - `RemoteGit-Windows` → `.msi` and `.exe` installers
 
-Pushing a tag (`git tag v0.1.0 && git push --tags`) also creates a draft GitHub Release with the installers.
+### Publishing a new version
+
+1. Raise the version in `package.json`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`.
+2. Commit, then tag and push: `git tag v0.3.0 && git push && git push --tags`.
+3. The Build workflow creates the release with both installers and the `latest.json` that installed apps update from.
+
+Signing needs the `TAURI_SIGNING_PRIVATE_KEY` repository secret (made with `npx tauri signer generate`); the matching public key is in `tauri.conf.json`.
 
 ### B) Locally
 

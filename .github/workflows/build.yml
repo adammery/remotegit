@@ -1,6 +1,6 @@
 # Builds the macOS (.dmg, universal) and Windows (.msi + .exe) installers.
 # Run it from the Actions tab ("Run workflow") to get downloadable artifacts,
-# or push a tag like v0.1.0 to also create a draft GitHub release.
+# or push a tag like v0.2.0 to publish a GitHub release that installed apps update from.
 name: Build
 
 on:
@@ -9,11 +9,28 @@ on:
     tags: ['v*']
 
 jobs:
+  # On a tag, create the release first so both platforms upload into it.
+  release:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - run: gh release create "$TAG" --repo "$REPO" --title "RemoteGit $TAG" --notes "Download the .dmg for macOS or the -setup.exe for Windows below. Installed copies update themselves."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+
   build:
+    needs: release
+    if: always() && needs.release.result != 'failure'
     permissions:
       contents: write
     strategy:
       fail-fast: false
+      # One at a time on releases, so the two jobs don't overwrite each other's latest.json.
+      max-parallel: ${{ github.ref_type == 'tag' && 1 || 2 }}
       matrix:
         include:
           - platform: macos-latest
@@ -45,13 +62,16 @@ jobs:
       - run: npm test
         if: runner.os != 'Windows'
 
+      # Signs the update bundles; the app only installs updates signed with this key.
+      # On a tag it also publishes the release and latest.json the app checks.
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-          releaseName: 'RemoteGit ${{ github.ref_name }}'
-          releaseDraft: true
+          releaseDraft: false
           args: ${{ matrix.args }}
 
       - uses: actions/upload-artifact@v4

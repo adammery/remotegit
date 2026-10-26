@@ -1291,6 +1291,12 @@ function settingsPopover() {
             h('span', {}, h('b', {}, isMac ? 'Hide from the Dock' : 'Hide from the taskbar'), h('br'), h('span', { class: 'hint' }, 'Closing the window keeps RemoteGit running in the menu bar.')),
           ),
           h('button', { class: 'btn btn-block', type: 'button', onclick: () => { closePopover(); shortcutsModal(); } }, 'Keyboard shortcuts'),
+          h(
+            'div',
+            { class: 'settings-version' },
+            h('span', {}, `RemoteGit ${appVersion}`),
+            h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { closePopover(); checkForUpdates(); } }, 'Check for updates'),
+          ),
         ),
       );
     fill();
@@ -2116,6 +2122,63 @@ function newBranchModal() {
   });
 }
 
+// ============================================================ updates
+
+let appVersion = '';
+
+// Updates come from the GitHub release's latest.json and are signature-checked
+// by the updater plugin before anything is installed.
+async function checkForUpdates({ quiet = false } = {}) {
+  if (!tauri?.updater) {
+    if (!quiet) toast('Updates are checked in the installed app.');
+    return;
+  }
+  try {
+    const update = await tauri.updater.check();
+    if (update) showUpdatePopup(update);
+    else if (!quiet) toast(`RemoteGit ${appVersion} is the latest version.`);
+  } catch (e) {
+    if (!quiet) toast(String(e), 'error', 'Could not check for updates');
+  }
+}
+
+function showUpdatePopup(update) {
+  if ($('#update-popup')) return;
+  const install = h('button', { class: 'btn btn-primary btn-sm', type: 'button' }, 'Install and restart');
+  const el = h(
+    'div',
+    { class: 'toast update', id: 'update-popup' },
+    h(
+      'div',
+      { class: 'msg' },
+      h('b', {}, `RemoteGit ${update.version} is available`),
+      appVersion ? `You have ${appVersion}.` : '',
+      update.body && h('div', { class: 'update-notes' }, update.body),
+      h('div', { class: 'update-actions' }, h('button', { class: 'btn btn-sm', type: 'button', onclick: () => el.remove() }, 'Later'), install),
+    ),
+  );
+  install.addEventListener('click', async () => {
+    install.disabled = true;
+    let total = 0;
+    let done = 0;
+    try {
+      await update.downloadAndInstall((ev) => {
+        if (ev.event === 'Started') total = ev.data.contentLength || 0;
+        else if (ev.event === 'Progress') {
+          done += ev.data.chunkLength;
+          install.textContent = total ? `Downloading ${Math.round((done / total) * 100)}%` : 'Downloading…';
+        } else if (ev.event === 'Finished') install.textContent = 'Installing…';
+      });
+      await tauri.process.relaunch();
+    } catch (e) {
+      install.disabled = false;
+      install.textContent = 'Install and restart';
+      toast(String(e), 'error', 'The update failed');
+    }
+  });
+  $('#toast-root').append(el);
+}
+
 // ============================================================ toasts
 
 function toast(message, kind = 'info', title) {
@@ -2177,6 +2240,9 @@ function init() {
   $('#ai-btn').addEventListener('click', generateMessage);
   applyTheme();
   renderCommitFlags();
+  tauri.app?.getVersion().then((v) => (appVersion = v), () => {});
+  setTimeout(() => checkForUpdates({ quiet: true }), 5000);
+  setInterval(() => checkForUpdates({ quiet: true }), 6 * 3600 * 1000);
   if (trayPrefs().showInMenuBar) tauri.core.invoke('set_tray_visible', { visible: true }).catch(() => {});
   if (trayPrefs().showInMenuBar && trayPrefs().menuBarOnly) {
     // Start straight in the menu bar; the tray icon brings the window back.

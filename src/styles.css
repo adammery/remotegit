@@ -716,3 +716,8 @@ kbd { font: 12px var(--mono); padding: 1px 6px; border: 1px solid var(--border);
 .dl .code .hljs-section { color: var(--syn-constant); font-weight: 600; }
 .dl .code .hljs-emphasis { font-style: italic; }
 .dl .code .hljs-strong { font-weight: 600; }
+
+.settings-version { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+.toast.update { border-left-color: var(--st-new); }
+.update-notes { margin-top: 6px; color: var(--muted); max-height: 120px; overflow: auto; white-space: pre-wrap; }
+.update-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }

@@ -322,7 +322,7 @@ async function refreshDiff() {
 }
 
 // One `git status` over the open SSH connection: ~1.5 KB and a few ms on the server.
-const POLL_SECONDS = 3;
+const POLL_SECONDS = 4;
 let pollTimer = null;
 function schedulePoll() {
   clearTimeout(pollTimer);

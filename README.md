@@ -9,7 +9,7 @@ A GitHub Desktop-style Git client for repositories that live **on a server**. It
 - Uses the SSH client already on your system (`ssh` on macOS, OpenSSH on Windows 10/11), so your keys, ssh-agent and `~/.ssh/config` just work.
 - Keeps **one persistent SSH connection** per server and sends every git command through it, so a refresh is one quick command, not a new login.
 - Nothing to install on the server besides `git` and `sh`. Optional extras on the server: the GitHub CLI (`gh`) for pull requests, and Claude Code (`claude`) for AI commit messages.
-- While the window is visible, status refreshes every few seconds. Changes made elsewhere on the server (VS Code, vim, an AI agent, …) show up on their own. When the window is hidden, the app does nothing.
+- While the window is visible, status refreshes every 4 seconds. Changes made elsewhere on the server (VS Code, vim, an AI agent, …) show up on their own. When the window is hidden, the app does nothing.
 - Built with Tauri, so the installer is a few MB and memory use is low.
 
 ## Features

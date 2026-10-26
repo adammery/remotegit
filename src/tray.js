@@ -439,9 +439,9 @@ function init() {
   // Quick while open, slow in the background just to keep the menu bar count fresh.
   const tick = () => {
     refresh();
-    setTimeout(tick, document.hasFocus() ? 3000 : 30000);
+    setTimeout(tick, document.hasFocus() ? 4000 : 30000);
   };
-  setTimeout(tick, 3000);
+  setTimeout(tick, 4000);
 }
 
 init();

@@ -1,6 +1,6 @@
 # RemoteGit
 
-A GitHub Desktop-style Git client for repositories that live **on a server**. It connects over SSH, so the code stays on the server while you see changes, diffs, history and branches, and commit, push and pull from your Mac or Windows PC.
+A GitHub Desktop-style Git client for repositories that live **on a server**. It connects over SSH, so the code stays on the server while you see changes, diffs, history and branches, and commit, push and pull from your Mac or Windows PC. Repositories on your own computer work too.
 
 ![Changes](docs/screenshot.png)
 
@@ -9,13 +9,13 @@ A GitHub Desktop-style Git client for repositories that live **on a server**. It
 - Uses the SSH client already on your system (`ssh` on macOS, OpenSSH on Windows 10/11), so your keys, ssh-agent and `~/.ssh/config` just work.
 - Keeps **one persistent SSH connection** per server and sends every git command through it, so a refresh is one quick command, not a new login.
 - Nothing to install on the server besides `git` and `sh`. Optional extras on the server: the GitHub CLI (`gh`) for pull requests, and Claude Code (`claude`) for AI commit messages.
-- While the window is visible, status refreshes every 4 seconds. Changes made elsewhere on the server (VS Code, vim, an AI agent, …) show up on their own. When the window is hidden, the app does nothing.
+- While the window has focus, status refreshes every 4 seconds, and right away when you switch back to it. Changes made elsewhere on the server (VS Code, vim, an AI agent, …) show up on their own. When you're in another app, RemoteGit sends nothing to the server. One refresh is about 1.5 KB and a few milliseconds of `git status` on the server.
 - Built with Tauri, so the installer is a few MB and memory use is low.
 
 ## Features
 
 **Changes**
-- Changed files with checkboxes and a diff with line numbers.
+- Changed files with checkboxes and a diff with line numbers and **syntax highlighting** (GitHub's colors, about 35 languages).
 - **Commit only some lines**: click the gutter (or drag over it) to choose lines, or click a `@@` header for the whole block.
 - Summary, description, **co-authors** (`@login` or `Name <email>`), and options to bypass hooks, add a Signed-off-by trailer or allow an empty commit.
 - **AI commit message**: the ✨ button asks Claude Code on the server to describe the selected changes in the style of your recent commits. No API key in the app.
@@ -31,6 +31,7 @@ A GitHub Desktop-style Git client for repositories that live **on a server**. It
 
 **Branches and remotes**
 - Branch list with Default, Recent and Other branches, plus remote branches; create a new branch.
+- **Merge** another branch into the current one (merge commit or squash) from the bottom of the branch list.
 - **Pull Requests** tab: open PRs from the GitHub CLI on the server; click one to check it out.
 - **Fetch / Pull / Push / Publish branch** in one button with the ahead/behind counts; the ▾ next to it picks a specific action.
 
@@ -38,12 +39,21 @@ A GitHub Desktop-style Git client for repositories that live **on a server**. It
 
 **Servers and repositories**
 - Several servers; the **Server** menu filters the repository list to one server or shows all.
+- **This computer**: use repositories on your own Mac or PC as well, like GitHub Desktop (needs git; on Windows, Git for Windows).
 - **Test connection** checks SSH, git, the GitHub CLI and Claude Code on the server.
 - Add repositories by scanning the server (`~`, `/var/www`, `/srv`), by path, or with a **folder browser** that walks the server's folders.
 - Pick your SSH key with a file dialog. "Open in VS Code" opens the repo through Remote-SSH; "Copy SSH command" gives you a terminal in the repo folder.
 
+**Menu bar**
+- Turn on **Show in menu bar** (⚙ in the top right) for an icon in the macOS menu bar or the Windows system tray, with the number of changes next to it.
+- Click it for a small window: changed files, commit everything with an optional AI message, push or pull, and Undo. Handy when an AI does the work on the server and you only check in now and then.
+- **Hide from the Dock** keeps RemoteGit only in the menu bar; closing the main window leaves it running there.
+
+<img src="docs/menubar.png" alt="Menu bar window" width="360">
+
 **Look**
 - Light and dark mode, following the system or set by hand (⚙ in the top right).
+- The newest commit can be undone from under the Commit button until it's pushed.
 
 ![Light mode](docs/light.png)
 
@@ -130,14 +140,16 @@ Layout:
 | File | What it does |
 |---|---|
 | `src-tauri/src/ssh.rs` | persistent SSH connection, framing of each command's output |
-| `src-tauri/src/main.rs` | Tauri commands `ssh_connect`, `ssh_exec`, `ssh_disconnect` |
+| `src-tauri/src/main.rs` | Tauri commands (`ssh_connect`, `ssh_exec`, …), the menu bar icon and window |
 | `src/git.js` | git commands (safely escaped) and parsers for their output |
-| `src/app.js` | UI (plain JavaScript, no framework, no build step) |
+| `src/app.js` | main window UI (plain JavaScript, no framework, no build step) |
+| `src/tray.js` | the small menu bar window |
 | `src/styles.css` | styling, light and dark mode |
+| `src/vendor/` | highlight.js for syntax highlighting |
 
 ## Not supported yet
 
-Password login (keys only), resolving merge conflicts inside the app (conflicts are shown; resolve them in an editor, then commit), stash, reordering commits, syntax highlighting in diffs, image diffs, signing commits with a passphrase-protected key.
+Password login (keys only), resolving merge conflicts inside the app (conflicts are shown; resolve them in an editor, then commit), stash, reordering commits, image diffs, signing commits with a passphrase-protected key.
 
 ## Credits
 

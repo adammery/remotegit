@@ -423,25 +423,42 @@ function applyTheme() {
 function init() {
   if (!tauri?.core) return;
   applyTheme();
+  // This window exists even when the menu bar icon is off, so it stays idle
+  // until the icon is turned on. Then: every 4 s while open, and every
+  // 5 minutes in the background just for the count next to the icon.
+  const iconOn = () => !!read(TRAY_KEY).showInMenuBar;
+  let started = false;
+  let timer = null;
+  const schedule = (ms) => {
+    clearTimeout(timer);
+    timer = setTimeout(tick, ms);
+  };
+  function tick() {
+    if (!iconOn()) return schedule(60_000);
+    if (!started) {
+      started = true;
+      selectRepo(read(TRAY_KEY).repoId);
+    } else refresh();
+    schedule(document.hasFocus() ? 4000 : 300_000);
+  }
   try {
     // Behave like a menu: close when the user clicks elsewhere.
     tauri.window?.getCurrentWindow?.().onFocusChanged(({ payload: focused }) => {
       if (focused) {
         applyTheme();
         main = read(MAIN_KEY);
-        if (!T.repo || !(main.repos || []).some((r) => r.id === T.repo.id)) selectRepo(prefs.repoId);
+        started = true;
+        if (!T.repo || !(main.repos || []).some((r) => r.id === T.repo.id)) selectRepo(read(TRAY_KEY).repoId);
         else refresh();
-      } else if (!T.busy) hide();
+        schedule(4000);
+      } else {
+        if (!T.busy) hide();
+        schedule(300_000);
+      }
     });
   } catch {}
   document.addEventListener('keydown', (e) => e.key === 'Escape' && hide());
-  selectRepo(prefs.repoId);
-  // Quick while open, slow in the background just to keep the menu bar count fresh.
-  const tick = () => {
-    refresh();
-    setTimeout(tick, document.hasFocus() ? 4000 : 30000);
-  };
-  setTimeout(tick, 4000);
+  tick();
 }
 
 init();

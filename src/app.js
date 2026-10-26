@@ -324,11 +324,14 @@ async function refreshDiff() {
 // One `git status` over the open SSH connection: ~1.5 KB and a few ms on the server.
 const POLL_SECONDS = 4;
 let pollTimer = null;
+// Polls only while the window has focus; nothing at all goes to the server
+// while you're in another app. Coming back refreshes right away.
 function schedulePoll() {
   clearTimeout(pollTimer);
+  if (!document.hasFocus()) return;
   const secs = S.error?.kind === 'conn' ? 15 : POLL_SECONDS;
   pollTimer = setTimeout(async () => {
-    if (document.visibilityState === 'visible' && !S.busy) await refresh();
+    if (!S.busy) await refresh();
     schedulePoll();
   }, secs * 1000);
 }
@@ -2267,8 +2270,11 @@ function init() {
     document.addEventListener('mouseup', up);
   });
 
-  window.addEventListener('focus', () => refresh());
-  document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && refresh());
+  window.addEventListener('focus', () => {
+    refresh();
+    schedulePoll();
+  });
+  window.addEventListener('blur', () => clearTimeout(pollTimer));
   // Keep "Last fetched … ago" fresh.
   setInterval(() => {
     if (!S.status || S.busy) return;

@@ -398,6 +398,32 @@ async function loadCommitDiff() {
   renderContent();
 }
 
+function selectCommitFile(f) {
+  if (S.commitFile === f) return;
+  S.commitFile = f;
+  S.commitDiff = null;
+  renderContent();
+  loadCommitDiff();
+}
+
+// ↑ ↓ move between the commit's files, ← goes back to the commit list.
+function commitFilesKey(e) {
+  if (e.key === 'ArrowLeft') {
+    e.preventDefault();
+    $('#commit-list').focus();
+  }
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  e.preventDefault();
+  // While another commit is still loading, the list on screen belongs to the old one.
+  const c = S.commit;
+  if (c?.sha !== S.selectedSha) return;
+  const i = c.files.indexOf(S.commitFile);
+  const next = c.files[Math.max(0, Math.min(c.files.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)))];
+  if (!next || next === S.commitFile) return;
+  selectCommitFile(next);
+  $('#commit-files .selected')?.scrollIntoView({ block: 'nearest' });
+}
+
 // ============================================================ actions
 
 async function withBusy(label, fn) {
@@ -822,10 +848,18 @@ function renderContent() {
   const key = S.tab === 'history' ? `h:${S.selectedSha}:${S.commitFile?.path}` : `c:${S.selectedPath}`;
   const old = root.querySelector('.diff');
   const scroll = root.dataset.key === key && old ? [old.scrollTop, old.scrollLeft] : null;
+  // The commit's file list is rebuilt too; keep its focus and scroll so the arrow keys keep working.
+  const oldFiles = root.querySelector('#commit-files');
+  const filesSha = oldFiles?.dataset.sha;
+  const filesScroll = oldFiles?.scrollTop;
+  const filesFocused = !!oldFiles && document.activeElement === oldFiles;
   root.replaceChildren(...[contentView()].flat());
   root.dataset.key = key;
   const diff = root.querySelector('.diff');
   if (scroll && diff) [diff.scrollTop, diff.scrollLeft] = scroll;
+  const files = root.querySelector('#commit-files');
+  if (files && files.dataset.sha === filesSha) files.scrollTop = filesScroll;
+  if (files && filesFocused) files.focus({ preventScroll: true });
 }
 
 function contentView() {
@@ -1102,7 +1136,7 @@ function historyView() {
   );
   const files = h(
     'div',
-    { class: 'file-list', tabindex: '0' },
+    { class: 'file-list', id: 'commit-files', tabindex: '0', dataset: { sha: c.sha }, onkeydown: commitFilesKey },
     c.files.map((f) => {
       const [dir, name] = splitPath(f.path);
       return h(
@@ -1110,12 +1144,7 @@ function historyView() {
         {
           class: 'file-row' + (f === S.commitFile ? ' selected' : ''),
           title: f.orig ? `${f.orig} → ${f.path}` : f.path,
-          onclick: () => {
-            S.commitFile = f;
-            S.commitDiff = null;
-            renderContent();
-            loadCommitDiff();
-          },
+          onclick: () => selectCommitFile(f),
         },
         h('span', { class: 'file-path' }, h('span', { class: 'dir' }, ltr((f.orig ? f.orig + ' → ' : '') + dir)), h('span', { class: 'name' }, name)),
         h('span', { class: `file-status ${f.kind}`, html: fileIcon(f.kind) }),
@@ -1347,6 +1376,7 @@ function shortcutsModal() {
       { class: 'shortcuts' },
       SHORTCUTS.map(([combo, label]) => h('div', { class: 'shortcut' }, h('span', {}, label), h('kbd', {}, keyLabel(combo)))),
       h('div', { class: 'shortcut' }, h('span', {}, 'Move in lists'), h('kbd', {}, '↑ ↓')),
+      h('div', { class: 'shortcut' }, h('span', {}, 'History: go to the commit’s files / back'), h('kbd', {}, '→ ←')),
       h('div', { class: 'shortcut' }, h('span', {}, 'Check / uncheck the selected file'), h('kbd', {}, isMac ? 'Space' : 'Space')),
     ),
   });
@@ -2294,6 +2324,11 @@ function init() {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
         moveSelection(e.key === 'ArrowDown' ? 1 : -1);
+      }
+      if (e.key === 'ArrowRight' && id === '#commit-list') {
+        e.preventDefault();
+        const files = $('#commit-files');
+        if (files?.querySelector('.file-row')) files.focus();
       }
       if (e.key === ' ' && id === '#file-list' && S.selectedPath && e.target === e.currentTarget) {
         e.preventDefault();

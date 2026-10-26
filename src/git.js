@@ -309,6 +309,14 @@ true`,
   return { commits, unpushed: new Set(unpushed.split('\n').filter(Boolean)) };
 }
 
+/** The tip commit, or null on a branch without commits. */
+export async function getHeadCommit(exec, repo) {
+  const r = await exec(inRepo(repo, `${GIT} log -1 --format='%H%x1f%s%x1f%ct' HEAD`));
+  if (r.code !== 0) return null;
+  const [sha, summary, time] = r.stdout.trim().split('\x1f');
+  return sha ? { sha, summary, time: Number(time) } : null;
+}
+
 export async function getCommit(exec, repo, sha) {
   const out = await run(
     exec,

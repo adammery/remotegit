@@ -315,13 +315,15 @@ input[type="checkbox"]:focus-visible { box-shadow: 0 0 0 3px rgba(68, 147, 248, 
 .undo-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-top: 1px solid var(--border);
-  font-size: 11px;
+  gap: 10px;
+  margin: 2px -10px -10px;
+  padding: 9px 10px;
+  border-top: 1px solid var(--row-border);
   flex: none;
 }
-.undo-bar .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.undo-bar .grow { flex: 1; min-width: 0; }
+.undo-when { color: var(--muted); font-size: 12px; }
+.undo-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 
 .commit-box {
   flex: none;

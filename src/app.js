@@ -205,6 +205,7 @@ const S = {
   diffFull: false,
   busy: null, // label of a running network/commit operation
   lastCommit: null, // { sha, summary, repoId } for undo
+  headCommit: null, // tip of the branch, offered for Undo while unpushed
   history: { commits: [], unpushed: new Set(), done: false, loading: false, oid: undefined },
   selectedSha: null,
   commit: null, // details of selected commit
@@ -229,6 +230,7 @@ function selectRepo(repoId) {
     diff: null,
     diffFull: false,
     lastCommit: null,
+    headCommit: null,
     history: { commits: [], unpushed: new Set(), done: false, loading: false, oid: undefined },
     selectedSha: null,
     commit: null,
@@ -275,6 +277,7 @@ async function refresh() {
         renderContent();
     }
     if (headMoved && S.tab === 'history') loadHistory(true);
+    if (headMoved) loadHeadCommit();
     loadGitHubUser(S.server);
     if (S.tab === 'changes') await refreshDiff();
   } catch (e) {
@@ -523,14 +526,51 @@ async function generateMessage() {
   }
 }
 
+async function loadHeadCommit() {
+  const gen = S.gen;
+  const oid = S.status?.branch.oid;
+  const head = oid ? await git.getHeadCommit(ex, S.repo.path).catch(() => null) : null;
+  if (gen !== S.gen || S.status?.branch.oid !== oid) return;
+  S.headCommit = head;
+  renderUndo();
+}
+
+/** Like GitHub Desktop: the newest commit can be undone until it is pushed. */
+function undoable() {
+  const st = S.status;
+  const c = S.headCommit;
+  if (!st || !c || c.sha !== st.branch.oid || !st.branch.head) return null;
+  return !st.branch.upstream || st.branch.ahead > 0 ? c : null;
+}
+
 async function undoLastCommit() {
-  const lc = S.lastCommit;
-  if (!lc) return;
+  const c = undoable();
+  if (!c) return;
   await withBusy('Undo', async () => {
-    await git.undoCommit(ex, S.repo.path, lc.sha);
+    const full = await git.getCommit(ex, S.repo.path, c.sha);
+    await git.undoCommit(ex, S.repo.path, c.sha);
     S.lastCommit = null;
-    if (!$('#summary').value) $('#summary').value = lc.summary;
+    if (!$('#summary').value.trim()) {
+      $('#summary').value = full.summary;
+      $('#description').value = full.body;
+    }
   });
+}
+
+function renderUndo() {
+  const undo = $('#undo-bar');
+  const c = undoable();
+  undo.hidden = !c;
+  if (!c) return;
+  undo.replaceChildren(
+    h(
+      'div',
+      { class: 'grow' },
+      h('div', { class: 'undo-when' }, `Committed ${ago(c.time)}`),
+      h('div', { class: 'undo-summary', title: c.summary }, c.summary),
+    ),
+    h('button', { class: 'btn btn-sm', type: 'button', onclick: undoLastCommit, disabled: !!S.busy }, 'Undo'),
+  );
 }
 
 function confirmDiscard(files) {
@@ -675,22 +715,15 @@ function renderChanges() {
   updateCommitButton();
   $('#avatar').replaceWith(Object.assign(avatar(S.status?.user.name, false, S.status?.user.email), { id: 'avatar' }));
 
-  const undo = $('#undo-bar');
-  const lc = S.lastCommit;
-  undo.hidden = !(lc && lc.repoId === S.repo?.id);
-  if (!undo.hidden) {
-    undo.replaceChildren(
-      h('span', { html: icons.commit }),
-      h('span', { class: 'grow', title: lc.summary }, 'Committed: ', h('b', {}, lc.summary)),
-      h('button', { class: 'btn btn-sm', type: 'button', onclick: undoLastCommit, disabled: !!S.busy }, 'Undo'),
-    );
-  }
+  renderUndo();
 }
 
 function updateCommitButton() {
   const btn = $('#commit-btn');
   const branch = S.status?.branch.head || 'HEAD';
-  btn.replaceChildren(S.busy === 'Commit' ? 'Committing…' : 'Commit to ', S.busy === 'Commit' ? '' : h('b', {}, branch));
+  const n = checkedFiles().length;
+  const what = n > 1 ? `Commit ${n} files to ` : 'Commit to ';
+  btn.replaceChildren(S.busy === 'Commit' ? 'Committing…' : what, S.busy === 'Commit' ? '' : h('b', {}, branch));
   btn.disabled = !S.status || (!checkedFiles().length && !store.commitOpts.allowEmpty) || !$('#summary').value.trim() || !!S.busy;
 }
 
@@ -2066,7 +2099,11 @@ function init() {
   window.addEventListener('focus', () => refresh());
   document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && refresh());
   // Keep "Last fetched … ago" fresh.
-  setInterval(() => S.status && !S.busy && renderToolbar(), 30000);
+  setInterval(() => {
+    if (!S.status || S.busy) return;
+    renderToolbar();
+    renderUndo();
+  }, 30000);
 
   selectRepo(store.currentRepoId || store.repos[0]?.id);
   schedulePoll();

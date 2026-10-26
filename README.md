@@ -99,3 +99,7 @@ Layout:
 ## Not supported yet
 
 Password login (keys only), resolving merge conflicts inside the app (conflicts are shown; resolve them in an editor, then commit), stash, image diffs, signing commits with a passphrase-protected key.
+
+## Credits
+
+Icons are [Octicons](https://primer.style/octicons) by GitHub Inc., used under the MIT License. RemoteGit is not affiliated with or endorsed by GitHub.

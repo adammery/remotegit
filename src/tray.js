@@ -17,8 +17,9 @@ const read = (key) => {
     return {};
   }
 };
+// The main window changes these too, so always start from what's stored.
 const writePrefs = (patch) => {
-  prefs = { ...prefs, ...patch };
+  prefs = { ...read(TRAY_KEY), ...patch };
   try {
     localStorage.setItem(TRAY_KEY, JSON.stringify(prefs));
   } catch {}
@@ -214,6 +215,7 @@ function undoable() {
 
 function render() {
   main = read(MAIN_KEY);
+  prefs = read(TRAY_KEY);
   const root = document.getElementById('tray');
   const servers = main.servers || [];
   const repos = main.repos || [];
@@ -458,6 +460,8 @@ function init() {
     });
   } catch {}
   document.addEventListener('keydown', (e) => e.key === 'Escape' && hide());
+  // Settings may have changed in the main window while this one was closed.
+  window.addEventListener('focus', () => render());
   tick();
 }
 

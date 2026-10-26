@@ -15,7 +15,6 @@ const store = Object.assign(
     sidebarWidth: 300,
     pollSeconds: 3,
     theme: 'system',
-    style: 'github',
     commitOpts: { noVerify: false, signoff: false, allowEmpty: false },
   },
   readStore(),
@@ -1130,7 +1129,6 @@ function serverPopover() {
 }
 
 function applyTheme() {
-  document.documentElement.dataset.style = store.style || 'github';
   const t = store.theme || 'system';
   if (t === 'system') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = t;
@@ -1148,8 +1146,6 @@ function settingsPopover() {
         h(
           'div',
           { class: 'settings' },
-          h('div', { class: 'settings-label' }, 'Style'),
-          seg([['github', 'GitHub'], ['remotegit', 'RemoteGit']], store.style || 'github', (v) => { store.style = v; save(); applyTheme(); fill(); }),
           h('div', { class: 'settings-label' }, 'Appearance'),
           seg([['system', 'System'], ['light', 'Light'], ['dark', 'Dark']], store.theme || 'system', (v) => { store.theme = v; save(); applyTheme(); fill(); }),
           h('div', { class: 'settings-label' }, 'Refresh changes every'),

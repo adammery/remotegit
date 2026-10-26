@@ -43,9 +43,9 @@ A GitHub Desktop-style Git client for repositories that live **on a server**. It
 - Pick your SSH key with a file dialog. "Open in VS Code" opens the repo through Remote-SSH; "Copy SSH command" gives you a terminal in the repo folder.
 
 **Look**
-- Two styles: **GitHub** (familiar blue) and **RemoteGit** (coral), each in light and dark, following the system or set by hand (⚙ in the top right).
+- Light and dark mode, following the system or set by hand (⚙ in the top right).
 
-![RemoteGit style, light](docs/style-remotegit-light.png)
+![Light mode](docs/light.png)
 
 ### Keyboard shortcuts
 

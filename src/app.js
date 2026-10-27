@@ -999,6 +999,12 @@ function noRepoView() {
     card({ title: 'Add a repository', sub: 'Scan a server for Git repositories or enter a path.', button: 'Add repository', onclick: () => addRepoModal(), primary: true }),
     card({ title: 'Clone a repository', sub: 'From GitHub or any Git URL, into a folder on the server.', button: 'Clone repository', onclick: () => cloneModal() }),
     card({ title: 'Create a new repository', sub: 'An empty repository in a folder on the server, optionally on GitHub too.', button: 'Create repository', onclick: () => createRepoModal() }),
+    (() => {
+      const local = store.servers.find((sv) => sv.local);
+      return local
+        ? card({ title: 'Set up this computer', sub: 'Check that git and the GitHub CLI are installed here, and install what’s missing.', button: 'Set up', onclick: () => setupModal(local) })
+        : card({ title: 'Use repositories on this computer', sub: isMac ? 'With git on this Mac; RemoteGit helps you install it.' : 'With Git for Windows on this PC; RemoteGit helps you install it.', button: 'Add this computer', onclick: addThisComputer });
+    })(),
     card({ title: 'Add another server', sub: 'Connect to a different machine over SSH.', button: 'Add server', onclick: () => serverModal() }),
   ]);
 }
@@ -3054,8 +3060,8 @@ function setupModal(server, onReady, initial) {
   const body = h('div', { class: 'setup' });
   const continueBtn = h('button', { class: 'btn btn-primary', type: 'button' }, onReady ? 'Continue' : 'Done');
   const run = (script, t) => execOn(server, script, t);
-  const mac = () => tools.os === 'Darwin' || (!tools.os && isMac);
-  const win = () => tools.os === 'Windows' || /MINGW|MSYS/.test(tools.os) || (!tools.os && isWindows);
+  const mac = () => tools?.os === 'Darwin' || (!tools?.os && isMac);
+  const win = () => tools?.os === 'Windows' || /MINGW|MSYS/.test(tools?.os || '') || (!tools?.os && isWindows);
 
   const recheck = async () => {
     busy = 'Checking…';
@@ -3102,6 +3108,11 @@ function setupModal(server, onReady, initial) {
     );
   const render = () => {
     const t = tools;
+    if (!t) {
+      body.replaceChildren(h('div', { class: 'hint setup-busy' }, h('span', { html: icons.spinner }), busy || 'Checking…'));
+      continueBtn.disabled = true;
+      return;
+    }
     const gitAction = h('button', { class: 'btn btn-sm btn-primary', type: 'button', disabled: !!busy, onclick: installGit }, win() || mac() ? 'Install' : 'Download');
     const ghAction = t.gh
       ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => copyText('gh auth login') }, 'Copy command')

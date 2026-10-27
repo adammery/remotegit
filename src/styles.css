@@ -720,3 +720,13 @@ kbd { font: 12px var(--mono); padding: 1px 6px; border: 1px solid var(--border);
 .toast.update { border-left-color: var(--st-new); }
 .update-notes { margin-top: 6px; color: var(--muted); max-height: 120px; overflow: auto; white-space: pre-wrap; }
 .update-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+
+.stash-row { display: flex; align-items: center; gap: 8px; padding: 0 10px; height: 31px; border-top: 1px solid var(--border); cursor: pointer; flex: none; }
+.stash-row:hover { background: var(--hover); }
+.stash-row.selected { background: var(--selected); }
+.stash-row .sub { color: var(--muted); font-size: 12px; }
+.stash-head { display: flex; align-items: flex-start; gap: 12px; }
+.stash-head > .grow { flex: 1; min-width: 0; }
+.stash-actions { display: flex; gap: 6px; flex: none; }
+.check.choice { align-items: flex-start; padding: 6px 0; }
+.check.choice input { margin-top: 2px; }

@@ -68,6 +68,7 @@
             </label>
             <div class="banner" id="state-banner" hidden></div>
             <div class="file-list" id="file-list" tabindex="0"></div>
+            <div class="stash-row" id="stash-row" hidden></div>
             <form class="commit-box" id="commit-form" autocomplete="off">
               <div class="summary-row">
                 <span class="avatar" id="avatar"></span>
@@ -89,6 +90,10 @@
           </section>
 
           <section class="pane" id="history-pane" hidden>
+            <div class="filter-row">
+              <span class="filter-icon" data-icon="search"></span>
+              <input id="history-filter" type="search" placeholder="Search commits, authors or a SHA" spellcheck="false" autocomplete="off" />
+            </div>
             <div class="commit-list" id="commit-list" tabindex="0"></div>
           </section>
         </aside>

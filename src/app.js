@@ -161,11 +161,12 @@ const S = {
   busy: null, // label of a running network/commit operation
   lastCommit: null, // { sha, summary, repoId } for undo
   headCommit: null, // tip of the branch, offered for Undo while unpushed
-  history: { commits: [], unpushed: new Set(), done: false, loading: false, oid: undefined },
+  history: { commits: [], unpushed: new Set(), done: false, loading: false, oid: undefined, search: '', req: 0 },
   selectedSha: null,
   commit: null, // details of selected commit
   commitFile: null,
   commitDiff: null,
+  stashView: null, // { sha, files, file, diff } while the branch's stash is open
 };
 const ex = (script, timeout) => execOn(S.server, script, timeout);
 const hasHead = () => !!S.status?.branch.oid;
@@ -186,11 +187,12 @@ function selectRepo(repoId) {
     diffFull: false,
     lastCommit: null,
     headCommit: null,
-    history: { commits: [], unpushed: new Set(), done: false, loading: false, oid: undefined },
+    history: { commits: [], unpushed: new Set(), done: false, loading: false, oid: undefined, search: '', req: 0 },
     selectedSha: null,
     commit: null,
     commitFile: null,
     commitDiff: null,
+    stashView: null,
   });
   if (repo && !S.server) S.repo = null;
   if (S.repo && store.serverFilter && S.repo.serverId !== store.serverFilter) store.serverFilter = S.repo.serverId;
@@ -198,6 +200,7 @@ function selectRepo(repoId) {
   save();
   $('#summary').value = '';
   $('#description').value = '';
+  $('#history-filter').value = '';
   renderAll();
   if (S.repo) refresh();
 }
@@ -218,6 +221,8 @@ async function refresh() {
     S.status = st;
     S.error = null;
     const headMoved = !prev || prev.branch.oid !== st.branch.oid || prev.branch.head !== st.branch.head;
+    const stashClosed = !!S.stashView && S.stashView.sha !== st.stash?.sha;
+    if (stashClosed) S.stashView = null;
     if (!prev || prev.raw !== st.raw || hadError) {
       const paths = new Set(st.files.map((f) => f.path));
       for (const p of S.excluded) if (!paths.has(p)) S.excluded.delete(p);
@@ -228,13 +233,13 @@ async function refresh() {
       renderToolbar();
       renderChanges();
       // An open diff refreshes itself below; everything else depends on status.
-      if (hadError || !prev || (S.tab === 'changes' && (S.selectedPath !== prevSelected || !S.selectedPath)))
+      if (hadError || !prev || stashClosed || (S.tab === 'changes' && (S.selectedPath !== prevSelected || !S.selectedPath)))
         renderContent();
     }
     if (headMoved && S.tab === 'history') loadHistory(true);
     if (headMoved) loadHeadCommit();
     loadGitHubUser(S.server);
-    if (S.tab === 'changes') await refreshDiff();
+    if (S.tab === 'changes' && !S.stashView) await refreshDiff();
   } catch (e) {
     if (gen !== S.gen) return;
     S.error = { kind: e instanceof ConnError ? 'conn' : 'git', message: e.message };
@@ -293,16 +298,18 @@ function schedulePoll() {
 
 // ============================================================ history
 
+// A reset (new search, branch moved) supersedes a page that is still loading.
 async function loadHistory(reset) {
   if (!S.repo) return;
   const H = S.history;
-  if (H.loading || (!reset && H.done)) return;
+  if (!reset && (H.loading || H.done)) return;
   H.loading = true;
+  const req = ++H.req;
   const gen = S.gen;
   try {
     const skip = reset ? 0 : H.commits.length;
-    const { commits, unpushed } = await git.getLog(ex, S.repo.path, { skip, limit: 100 });
-    if (gen !== S.gen) return;
+    const { commits, unpushed } = await git.getLog(ex, S.repo.path, { skip, limit: 100, search: H.search });
+    if (gen !== S.gen || req !== H.req) return;
     H.commits = reset ? commits : H.commits.concat(commits);
     H.unpushed = unpushed;
     H.done = commits.length < 100;
@@ -315,9 +322,9 @@ async function loadHistory(reset) {
     renderHistory();
     if (S.tab === 'history') renderContent();
   } catch (e) {
-    if (gen === S.gen) toast(e.message, 'error', 'Could not load history');
+    if (gen === S.gen && req === H.req) toast(e.message, 'error', 'Could not load history');
   } finally {
-    H.loading = false;
+    if (req === H.req) H.loading = false;
   }
 }
 
@@ -715,6 +722,7 @@ function renderChanges() {
   if (shown.length > MAX_ROWS) rows.push(h('div', { class: 'list-note' }, `…and ${shown.length - MAX_ROWS} more files`));
   if (S.filter && !shown.length && files.length) rows.push(h('div', { class: 'list-note' }, 'No files match the filter.'));
   list.replaceChildren(...rows);
+  renderStashRow();
 
   updateCommitButton();
   $('#avatar').replaceWith(Object.assign(avatar(S.status?.user.name, false, S.status?.user.email), { id: 'avatar' }));
@@ -742,7 +750,7 @@ function fileRow(f) {
   const row = h(
     'div',
     {
-      class: 'file-row' + (f.path === S.selectedPath ? ' selected' : ''),
+      class: 'file-row' + (f.path === S.selectedPath && !S.stashView ? ' selected' : ''),
       title: f.orig ? `${f.orig} → ${f.path}` : f.path,
       onclick: () => selectFile(f.path),
       oncontextmenu: (e) => fileMenu(e, f),
@@ -767,7 +775,8 @@ function fileRow(f) {
 }
 
 function selectFile(path) {
-  if (S.selectedPath === path) return;
+  if (S.selectedPath === path && !S.stashView) return;
+  S.stashView = null;
   S.selectedPath = path;
   S.diff = null;
   S.diffFull = false;
@@ -811,7 +820,7 @@ function renderHistory() {
       H.unpushed.has(c.sha) && h('span', { class: 'unpushed', title: 'Not pushed yet' }, h('span', { html: icons.up })),
     ),
   );
-  if (!H.commits.length) rows.push(h('div', { class: 'list-note' }, H.loading ? 'Loading…' : 'No commits yet.'));
+  if (!H.commits.length) rows.push(h('div', { class: 'list-note' }, H.loading ? 'Loading…' : H.search ? 'No commits match.' : 'No commits yet.'));
   list.replaceChildren(...rows);
 }
 
@@ -840,6 +849,7 @@ function contentView() {
   if (S.error) return errorView();
   if (!S.status) return h('div', { class: 'diff-notice' }, 'Loading…');
   if (S.tab === 'history') return historyView();
+  if (S.stashView) return stashView();
   const file = currentFiles().find((f) => f.path === S.selectedPath);
   if (!file) return noChangesView();
   return [
@@ -871,6 +881,7 @@ function welcomeView() {
 function noRepoView() {
   return blank('No repository selected', 'Pick a repository from the toolbar, or add one from a server.', [
     card({ title: 'Add a repository', sub: 'Scan a server for Git repositories or enter a path.', button: 'Add repository', onclick: () => addRepoModal(), primary: true }),
+    card({ title: 'Clone a repository', sub: 'From GitHub or any Git URL, into a folder on the server.', button: 'Clone repository', onclick: () => cloneModal() }),
     card({ title: 'Add another server', sub: 'Connect to a different machine over SSH.', button: 'Add server', onclick: () => serverModal() }),
   ]);
 }
@@ -1091,7 +1102,7 @@ function diffView(d, file, path = file?.path) {
 
 function historyView() {
   const c = S.commit;
-  if (!c) return h('div', { class: 'diff-notice' }, S.history.commits.length ? 'Loading…' : 'No commits yet.');
+  if (!c) return h('div', { class: 'diff-notice' }, S.history.commits.length ? 'Loading…' : S.history.search ? 'No commits match the search.' : 'No commits yet.');
   const head = h(
     'div',
     { class: 'commit-detail-head' },
@@ -1197,6 +1208,7 @@ function repoPopover() {
         'div',
         { class: 'pop-foot' },
         h('button', { class: 'btn btn-primary', type: 'button', disabled: !store.servers.length, onclick: () => { closePopover(); addRepoModal(filterServer()); } }, h('span', { html: icons.plus }), 'Add repository'),
+        h('button', { class: 'btn', type: 'button', disabled: !store.servers.length, onclick: () => { closePopover(); cloneModal(filterServer()); } }, h('span', { html: icons.clone }), 'Clone'),
       ),
     );
   }, 360);
@@ -1310,6 +1322,9 @@ const SHORTCUTS = [
   ['Mod+T', 'Switch repository', () => repoPopover()],
   ['Mod+B', 'Switch branch', () => branchPopover()],
   ['Mod+Shift+N', 'New branch', () => S.status && newBranchModal()],
+  ['Mod+Shift+O', 'Clone repository', () => cloneModal()],
+  ['Mod+Shift+S', 'Stash all changes', () => stashAll()],
+  ['Mod+F', 'Filter files / search history', () => { const el = $(S.tab === 'history' ? '#history-filter' : '#filter'); el.focus(); el.select(); }],
   ['Mod+Shift+L', 'Switch server', () => serverPopover()],
   ['Mod+P', 'Push', () => S.status?.remote && runSync({ kind: 'push', run: () => git.push(ex, S.repo.path, { remote: S.status.remote.name, hasUpstream: !!S.status.branch.upstream }) })],
   ['Mod+Shift+P', 'Pull', () => S.status?.branch.upstream && runSync({ kind: 'pull', run: () => git.pull(ex, S.repo.path) })],
@@ -1373,10 +1388,10 @@ function branchPopover(initialTab = 'branches') {
     );
     el.append(tabs, h('div', { class: 'pop-head' }, filter, newBtn), body, mergeFoot);
 
-    const branchItem = (name, time, onclick) =>
+    const branchItem = (name, time, onclick, oncontextmenu) =>
       h(
         'div',
-        { class: 'pop-item' + (name === current ? ' current' : ''), onclick },
+        { class: 'pop-item' + (name === current ? ' current' : ''), onclick, oncontextmenu },
         h('span', { html: name === current ? icons.check : icons.branch }),
         h('div', { class: 'grow' }, h('div', { class: 'title' }, name)),
         time && h('span', { class: 'sub' }, ago(time)),
@@ -1391,7 +1406,7 @@ function branchPopover(initialTab = 'branches') {
       const section = (title, list) => {
         list = list.filter((b) => b && match(b) && !shown.has(b.name));
         list.forEach((b) => shown.add(b.name));
-        return list.length ? [h('div', { class: 'pop-group' }, title), list.slice(0, 300).map((b) => branchItem(b.name, b.time, () => switchBranch(b.name, false)))] : [];
+        return list.length ? [h('div', { class: 'pop-group' }, title), list.slice(0, 300).map((b) => branchItem(b.name, b.time, () => switchBranch(b.name, false), (e) => branchMenu(e, b, branches)))] : [];
       };
       const localNames = new Set(branches.local.map((b) => b.name));
       const remote = branches.remote.filter((b) => match(b) && !localNames.has(b.name.slice(b.name.indexOf('/') + 1)));
@@ -1399,7 +1414,7 @@ function branchPopover(initialTab = 'branches') {
         section('Default Branch', [byName.get(branches.defaultBranch)]),
         section('Recent Branches', branches.recent.map((n) => byName.get(n))),
         section('Other Branches', branches.local),
-        remote.length ? [h('div', { class: 'pop-group' }, 'Remote Branches'), remote.slice(0, 300).map((b) => branchItem(b.name, b.time, () => switchBranch(b.name, true)))] : [],
+        remote.length ? [h('div', { class: 'pop-group' }, 'Remote Branches'), remote.slice(0, 300).map((b) => branchItem(b.name, b.time, () => switchBranch(b.name, true), (e) => remoteBranchMenu(e, b)))] : [],
       ].flat(Infinity);
       return out.length ? out : [h('div', { class: 'pop-empty' }, 'No branches match.')];
     };
@@ -1547,11 +1562,354 @@ function mergeModal() {
 function switchBranch(name, remote) {
   closePopover();
   if (!remote && name === S.status?.branch.head) return;
-  withBusy('Switching branch', async () => {
-    if (remote) await git.checkoutRemoteBranch(ex, S.repo.path, name);
-    else await git.checkoutBranch(ex, S.repo.path, name);
-    S.lastCommit = null;
+  const go = () =>
+    withBusy('Switching branch', async () => {
+      if (remote) await git.checkoutRemoteBranch(ex, S.repo.path, name);
+      else await git.checkoutBranch(ex, S.repo.path, name);
+      S.lastCommit = null;
+    });
+  if (currentFiles().length && S.status.branch.head) switchWithChangesModal(remote ? name.slice(name.indexOf('/') + 1) : name, go);
+  else go();
+}
+
+// GitHub Desktop's choice: leave the changes stashed on this branch, or take them along.
+function switchWithChangesModal(target, go) {
+  const from = S.status.branch.head;
+  const hadStash = !!S.status.stash;
+  let leave = true;
+  const option = (value, title, sub) =>
+    h(
+      'label',
+      { class: 'check choice' },
+      h('input', { type: 'radio', name: 'switch-choice', checked: value === leave, onchange: () => (leave = value) }),
+      h('span', {}, h('b', {}, title), h('br'), h('span', { class: 'hint' }, sub)),
+    );
+  openModal({
+    title: 'Switch branch',
+    body: [
+      h('p', { style: 'margin:0 0 10px' }, `You have changes on ${from}. What should happen to them?`),
+      option(true, `Leave my changes on ${from}`, hadStash ? `They are stashed, replacing the changes already stashed on ${from}.` : `They are stashed; restore them when you come back to ${from}.`),
+      option(false, `Bring my changes to ${target}`, 'Your changes come along to the other branch.'),
+    ],
+    foot: (close) => [
+      h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'),
+      h(
+        'button',
+        {
+          class: 'btn btn-primary',
+          type: 'button',
+          onclick: () => {
+            close();
+            if (!leave) return go();
+            // Switch only once the changes are safely stashed.
+            withBusy('Stashing changes', async () => {
+              if (S.status.stash) await git.dropStash(ex, S.repo.path, S.status.stash.sha);
+              await git.stashChanges(ex, S.repo.path, from);
+              return true;
+            }).then((ok) => ok && go());
+          },
+        },
+        'Switch branch',
+      ),
+    ],
   });
+}
+
+// ============================================================ stash
+
+function renderStashRow() {
+  const row = $('#stash-row');
+  const stash = S.status?.stash;
+  row.hidden = !stash;
+  if (!stash) return;
+  row.classList.toggle('selected', !!S.stashView);
+  row.replaceChildren(
+    h('span', { html: icons.stack }),
+    h('span', { class: 'grow' }, 'Stashed Changes'),
+    h('span', { class: 'sub' }, ago(stash.time)),
+    h('span', { html: icons.chevronRight }),
+  );
+  row.onclick = openStash;
+}
+
+async function openStash() {
+  const stash = S.status?.stash;
+  if (!stash) return;
+  if (S.stashView?.sha === stash.sha) return;
+  S.stashView = { sha: stash.sha, files: null, file: null, diff: null };
+  renderChanges();
+  renderContent();
+  const gen = S.gen;
+  try {
+    const files = await git.getStashFiles(ex, S.repo.path, stash.sha);
+    if (gen !== S.gen || S.stashView?.sha !== stash.sha) return;
+    S.stashView.files = files;
+    selectStashFile(files[0] || null);
+  } catch (e) {
+    if (gen === S.gen && S.stashView) {
+      S.stashView.error = e.message;
+      renderContent();
+    }
+  }
+}
+
+async function selectStashFile(f) {
+  const V = S.stashView;
+  if (!V) return;
+  V.file = f;
+  V.diff = null;
+  S.diffFull = false;
+  renderContent();
+  if (!f) return;
+  try {
+    const d = await git.getStashFileDiff(ex, S.repo.path, V.sha, f);
+    if (S.stashView === V && V.file === f) V.diff = d;
+  } catch (e) {
+    if (S.stashView === V && V.file === f) V.diff = { error: e.message };
+  }
+  if (S.stashView === V) renderContent();
+}
+
+function stashView() {
+  const V = S.stashView;
+  const changes = currentFiles().length;
+  const head = h(
+    'div',
+    { class: 'commit-detail-head stash-head' },
+    h('div', { class: 'grow' }, h('h2', {}, 'Stashed changes'), h('div', { class: 'meta' }, h('span', {}, V.files ? `${V.files.length} changed file${V.files.length === 1 ? '' : 's'}` : 'Loading…'), h('span', {}, `stashed ${ago(S.status.stash?.time)}`))),
+    h(
+      'div',
+      { class: 'stash-actions' },
+      h('button', { class: 'btn', type: 'button', disabled: !!S.busy, onclick: () => confirmModal({ title: 'Discard stashed changes?', message: 'The stashed changes will be permanently lost.', confirm: 'Discard', danger: true, onConfirm: () => withBusy('Discard stash', () => git.dropStash(ex, S.repo.path, V.sha)) }) }, 'Discard'),
+      h('button', { class: 'btn btn-primary', type: 'button', disabled: !!S.busy, title: changes ? 'Git restores the stash over your current changes when they don’t touch the same files.' : null, onclick: () => withBusy('Restore stash', () => git.restoreStash(ex, S.repo.path, V.sha)) }, 'Restore'),
+    ),
+  );
+  if (V.error) return [head, h('div', { class: 'diff-notice' }, h('div', { class: 'error-box' }, V.error))];
+  const files = h(
+    'div',
+    { class: 'file-list', id: 'stash-files' },
+    (V.files || []).map((f) => {
+      const [dir, name] = splitPath(f.path);
+      return h(
+        'div',
+        { class: 'file-row' + (f === V.file ? ' selected' : ''), title: f.path, onclick: () => selectStashFile(f) },
+        h('span', { class: 'file-path' }, h('span', { class: 'dir' }, ltr((f.orig ? f.orig + ' → ' : '') + dir)), h('span', { class: 'name' }, name)),
+        h('span', { class: `file-status ${f.kind}`, html: fileIcon(f.kind) }),
+      );
+    }),
+  );
+  const diffCol = h('div', { class: 'diff-col' }, V.file ? diffView(V.diff, null, V.file.path) : h('div', { class: 'diff-notice' }, V.files ? 'The stash has no file changes.' : 'Loading…'));
+  return [head, h('div', { class: 'split' }, files, diffCol)];
+}
+
+function stashAll() {
+  const branch = S.status?.branch.head;
+  if (!branch || !currentFiles().length) return;
+  const run = () =>
+    withBusy('Stashing changes', async () => {
+      if (S.status.stash) await git.dropStash(ex, S.repo.path, S.status.stash.sha);
+      await git.stashChanges(ex, S.repo.path, branch);
+    });
+  if (!S.status.stash) return run();
+  confirmModal({
+    title: 'Overwrite stashed changes?',
+    message: `${branch} already has stashed changes. Stashing again replaces them, and the older stash is lost.`,
+    confirm: 'Overwrite',
+    danger: true,
+    onConfirm: run,
+  });
+}
+
+// ============================================================ branch actions
+
+function branchMenu(e, b, branches) {
+  e.preventDefault();
+  e.stopPropagation();
+  const st = S.status;
+  const isCurrent = b.name === st.branch.head;
+  const web = git.webUrl(st.remote?.url);
+  const remoteName = b.upstream?.slice(b.upstream.indexOf('/') + 1);
+  const onRemote = !!b.upstream && branches.remote.some((r) => r.name === b.upstream);
+  openMenu(e.clientX, e.clientY, [
+    !isCurrent && { label: 'Switch to Branch', disabled: !!S.busy, run: () => switchBranch(b.name, false) },
+    { label: 'Rename…', disabled: !!S.busy, run: () => { closePopover(); renameBranchModal(b); } },
+    { label: 'Copy Branch Name', run: () => copyText(b.name) },
+    web && onRemote && { label: new URL(web).hostname === 'github.com' ? 'View Branch on GitHub' : 'View Branch on the Web', run: () => openExternal(`${web}/tree/${remoteName.split('/').map(encodeURIComponent).join('/')}`) },
+    '-',
+    { label: isCurrent ? 'Delete… (switch to another branch first)' : 'Delete…', danger: true, disabled: isCurrent || !!S.busy, run: () => { closePopover(); deleteBranchModal(b, onRemote); } },
+  ]);
+}
+
+function remoteBranchMenu(e, b) {
+  e.preventDefault();
+  e.stopPropagation();
+  openMenu(e.clientX, e.clientY, [
+    { label: 'Check Out', disabled: !!S.busy, run: () => switchBranch(b.name, true) },
+    { label: 'Copy Branch Name', run: () => copyText(b.name.slice(b.name.indexOf('/') + 1)) },
+  ]);
+}
+
+function renameBranchModal(b) {
+  const input = h('input', { value: b.name, spellcheck: false });
+  const error = h('div', { class: 'form-error' });
+  const submit = async (close) => {
+    const name = input.value.trim().replace(/\s+/g, '-');
+    if (!name || name === b.name) return close();
+    try {
+      await git.renameBranch(ex, S.repo.path, b.name, name);
+      close();
+      refresh();
+    } catch (e) {
+      error.textContent = e.message;
+    }
+  };
+  let closeFn;
+  input.addEventListener('keydown', (e) => e.key === 'Enter' && submit(closeFn));
+  closeFn = openModal({
+    title: 'Rename branch',
+    body: [field('Name', input, b.upstream ? `Only the local branch is renamed; ${b.upstream} keeps its name.` : null), error],
+    foot: (close) => [h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'), h('button', { class: 'btn btn-primary', type: 'button', onclick: () => submit(close) }, 'Rename')],
+  });
+  input.select();
+}
+
+function deleteBranchModal(b, onRemote) {
+  let force = false;
+  let alsoRemote = false;
+  const message = h('p', { style: 'margin:0' }, `Delete the branch “${b.name}”?`);
+  const error = h('div', { class: 'form-error' });
+  const remoteBox =
+    onRemote &&
+    h(
+      'label',
+      { class: 'check', style: 'margin-top:10px' },
+      h('input', { type: 'checkbox', onchange: (e) => (alsoRemote = e.target.checked) }),
+      `Also delete ${b.upstream} from the remote`,
+    );
+  const btn = h('button', { class: 'btn btn-danger', type: 'button' }, 'Delete');
+  const closeFn = openModal({
+    title: 'Delete branch',
+    body: [message, remoteBox, error],
+    foot: (close) => [h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'), btn],
+  });
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    error.textContent = '';
+    try {
+      await git.deleteBranch(ex, S.repo.path, b.name, { force });
+      if (alsoRemote) await git.deleteRemoteBranch(ex, S.repo.path, b.upstream);
+      closeFn();
+      refresh();
+    } catch (e) {
+      btn.disabled = false;
+      if (e.unmerged && !force) {
+        force = true;
+        message.textContent = `“${b.name}” has commits that aren’t merged anywhere else. Deleting it loses them.`;
+        btn.textContent = 'Delete anyway';
+      } else error.textContent = e.message;
+    }
+  });
+}
+
+// ============================================================ clone
+
+function cloneModal(preselected) {
+  if (!store.servers.length) return serverModal();
+  let server = preselected || filterServer() || S.server || store.servers[0];
+  let ghRepos;
+  let pathEdited = false;
+  const parentOf = (srv) => {
+    const last = store.repos.filter((r) => r.serverId === srv.id).pop();
+    return last ? last.path.replace(/\/[^/]+\/?$/, '') || '~' : '~';
+  };
+  let parent = parentOf(server);
+  const source = h('input', { placeholder: 'owner/name, https://… or git@…', spellcheck: false, autofocus: true });
+  const path = h('input', { spellcheck: false });
+  const list = h('div', { class: 'repo-scan' });
+  const error = h('div', { class: 'form-error' });
+  const cloneBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Clone');
+  const updatePath = () => {
+    if (!pathEdited) path.value = `${parent.replace(/\/$/, '')}/${git.cloneName(source.value)}`;
+  };
+  const fillList = () => {
+    if (ghRepos === undefined) return list.replaceChildren(h('div', { class: 'pop-empty' }, 'Loading your GitHub repositories…'));
+    if (ghRepos === null)
+      return list.replaceChildren(h('div', { class: 'pop-empty' }, 'To pick from your GitHub repositories, sign in to the GitHub CLI on the server (', h('code', {}, 'gh auth login'), '). A URL works either way.'));
+    const term = source.value.trim().toLowerCase();
+    const shown = ghRepos.filter((r) => `${r.nameWithOwner} ${r.description || ''}`.toLowerCase().includes(term)).slice(0, 200);
+    list.replaceChildren(
+      ...(shown.length
+        ? shown.map((r) =>
+            h(
+              'div',
+              { class: 'pop-item' + (r.nameWithOwner === source.value.trim() ? ' current' : ''), onclick: () => { source.value = r.nameWithOwner; updatePath(); fillList(); } },
+              h('span', { html: icons.repo }),
+              h('div', { class: 'grow' }, h('div', { class: 'title' }, r.nameWithOwner, r.isPrivate && h('span', { class: 'tag-badge' }, 'Private')), r.description && h('div', { class: 'sub' }, r.description)),
+            ),
+          )
+        : [h('div', { class: 'pop-empty' }, ghRepos.length ? 'No repositories match.' : 'No repositories on your GitHub account.')]),
+    );
+  };
+  const loadGh = async () => {
+    ghRepos = undefined;
+    fillList();
+    try {
+      ghRepos = await git.listGitHubRepos((script, t) => execOn(server, script, t));
+    } catch {
+      ghRepos = null;
+    }
+    fillList();
+  };
+  source.addEventListener('input', () => { updatePath(); fillList(); });
+  path.addEventListener('input', () => (pathEdited = true));
+  const serverSelect = h(
+    'select',
+    { onchange: () => { server = store.servers.find((s) => s.id === serverSelect.value); parent = parentOf(server); updatePath(); loadGh(); } },
+    store.servers.map((s) => h('option', { value: s.id, selected: s.id === server.id }, s.name || s.host)),
+  );
+  const closeFn = openModal({
+    title: 'Clone a repository',
+    wide: true,
+    body: [
+      store.servers.length > 1 && field('Server', serverSelect),
+      field('Repository', source),
+      list,
+      h(
+        'div',
+        { class: 'field' },
+        h('span', {}, server.local ? 'Folder on this computer' : 'Folder on the server'),
+        h(
+          'div',
+          { class: 'input-row' },
+          path,
+          h('button', { class: 'btn', type: 'button', onclick: () => folderBrowser(server, parent, (p) => { parent = p; pathEdited = false; updatePath(); }) }, h('span', { html: icons.folder }), 'Choose…'),
+        ),
+      ),
+      error,
+    ],
+    foot: (close) => [h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'), cloneBtn],
+  });
+  cloneBtn.addEventListener('click', async () => {
+    const src = source.value.trim();
+    const dest = path.value.trim();
+    if (!src || !dest || dest.endsWith('/')) return (error.textContent = 'Enter the repository and a folder for it.');
+    error.textContent = '';
+    cloneBtn.disabled = true;
+    cloneBtn.textContent = 'Cloning…';
+    try {
+      const run = (script, t) => execOn(server, script, t);
+      await git.cloneRepo(run, src, dest);
+      const top = await git.resolveRepo(run, dest);
+      closeFn();
+      addRepos(server, [top]);
+    } catch (e) {
+      error.textContent = e.message;
+      cloneBtn.disabled = false;
+      cloneBtn.textContent = 'Clone';
+    }
+  });
+  updatePath();
+  loadGh();
 }
 
 // ============================================================ modals
@@ -2258,7 +2616,11 @@ function init() {
   $('#files-header').addEventListener('contextmenu', (e) => {
     e.preventDefault();
     const files = currentFiles();
-    if (files.length) openMenu(e.clientX, e.clientY, [{ label: 'Discard all changes…', danger: true, run: () => confirmDiscard(files) }]);
+    if (files.length)
+      openMenu(e.clientX, e.clientY, [
+        S.status.branch.head && { label: 'Stash all changes', disabled: !!S.busy, run: stashAll },
+        { label: 'Discard all changes…', danger: true, run: () => confirmDiscard(files) },
+      ]);
   });
   $('#commit-form').addEventListener('submit', doCommit);
   $('#summary').addEventListener('input', updateCommitButton);
@@ -2281,6 +2643,25 @@ function init() {
         renderChanges();
       }
     });
+  let searchTimer;
+  $('#history-filter').addEventListener('input', (e) => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      const term = e.target.value.trim();
+      if (term === S.history.search) return;
+      S.history.search = term;
+      S.history.commits = [];
+      S.history.done = false;
+      renderHistory();
+      loadHistory(true);
+    }, 250);
+  });
+  $('#history-filter').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      $('#commit-list').focus();
+    }
+  });
   $('#commit-list').addEventListener('scroll', (e) => {
     const el = e.target;
     if (el.scrollTop + el.clientHeight > el.scrollHeight - 200) loadHistory(false);

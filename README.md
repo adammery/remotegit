@@ -30,17 +30,20 @@ RemoteGit checks for new versions on its own and shows a popup with **Install an
 - Summary, description, **co-authors** (`@login` or `Name <email>`), and options to bypass hooks, add a Signed-off-by trailer or allow an empty commit.
 - **AI commit message**: the ✨ button asks Claude Code or Codex on the server to describe the selected changes in the style of your recent commits. When both are installed, a small menu lets you pick one. Codex runs read-only. No API key in the app.
 - **Undo** the last commit. Right-click a file to discard it, add it to `.gitignore`, or copy its path.
+- **Stash**: switching branches with changes asks whether to leave them on the branch (stashed) or bring them along; right-click the file list header to stash everything. **Stashed Changes** at the bottom shows the files and diff, with Restore and Discard. One stash per branch, compatible with GitHub Desktop's.
 
 ![Commit only some lines](docs/lines.png)
 
 **History**
 - Commits with author pictures, tags and an ↑ badge on unpushed ones; commit details, changed files and diff.
+- **Search** the history by summary, author, email, tag or the start of a SHA.
 - Right-click a commit: Amend, Reset to commit, Checkout, Revert, Create branch, Create tag, Cherry-pick, Copy SHA or tag, View on GitHub.
 
 ![History](docs/history.png)
 
 **Branches and remotes**
 - Branch list with Default, Recent and Other branches, plus remote branches; create a new branch.
+- Right-click a branch to switch to it, **rename** it, copy its name, view it on GitHub or **delete** it (optionally on the remote too; unmerged commits get a warning first).
 - **Merge** another branch into the current one (merge commit or squash) from the bottom of the branch list.
 - **Pull Requests** tab: open PRs from the GitHub CLI on the server; click one to check it out.
 - **Fetch / Pull / Push / Publish branch** in one button with the ahead/behind counts; the ▾ next to it picks a specific action.
@@ -52,6 +55,7 @@ RemoteGit checks for new versions on its own and shows a popup with **Install an
 - **This computer**: use repositories on your own Mac or PC as well, like GitHub Desktop (needs git; on Windows, Git for Windows).
 - **Test connection** checks SSH, git, the GitHub CLI, Claude Code and Codex on the server.
 - Add repositories by scanning the server (`~`, `/var/www`, `/srv`), by path, or with a **folder browser** that walks the server's folders.
+- **Clone** a repository onto the server: pick one of your GitHub repositories (via the GitHub CLI there, so private ones work) or paste any Git URL.
 - Pick your SSH key with a file dialog. "Open in VS Code" opens the repo through Remote-SSH; "Copy SSH command" gives you a terminal in the repo folder.
 
 **Menu bar**
@@ -76,6 +80,9 @@ RemoteGit checks for new versions on its own and shows a popup with **Install an
 | `⌘1` / `⌘2` | Changes / History |
 | `⌘T` / `⌘B` / `⌘⇧L` | Switch repository / branch / server |
 | `⌘⇧N` | New branch |
+| `⌘⇧O` | Clone repository |
+| `⌘⇧S` | Stash all changes |
+| `⌘F` | Filter files / search history |
 | `⌘P` / `⌘⇧P` / `⌘⇧T` | Push / Pull / Fetch |
 | `⌘↩` | Commit |
 | `⌘⇧M` | Generate the commit message with AI |
@@ -167,7 +174,7 @@ Layout:
 
 ## Not supported yet
 
-Password login (keys only), resolving merge conflicts inside the app (conflicts are shown; resolve them in an editor, then commit), stash, reordering commits, image diffs, signing commits with a passphrase-protected key.
+Password login (keys only), resolving merge conflicts inside the app (conflicts are shown; resolve them in an editor, then commit), reordering commits, image diffs, signing commits with a passphrase-protected key.
 
 ## License
 

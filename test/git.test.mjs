@@ -450,3 +450,85 @@ test('webUrl', () => {
   assert.equal(git.webUrl('ssh://git@gitlab.example.com:2222/g/sub/repo.git'), 'https://gitlab.example.com/g/sub/repo');
   assert.equal(git.webUrl('/srv/git/repo.git'), null);
 });
+
+test('stash per branch: save, list files and diffs, restore, drop', async () => {
+  const dir = newRepo();
+  writeFileSync(join(dir, 'a.txt'), 'one\n');
+  sh(dir, 'git add -A && git commit -qm init');
+  writeFileSync(join(dir, 'a.txt'), 'two\n');
+  writeFileSync(join(dir, 'new file.txt'), 'fresh\n');
+  assert.equal((await git.getStatus(exec, dir)).stash, null);
+
+  await git.stashChanges(exec, dir, 'main');
+  let st = await git.getStatus(exec, dir);
+  assert.equal(st.files.length, 0);
+  assert.ok(st.stash?.sha);
+  // Shows up in GitHub Desktop too.
+  assert.match(sh(dir, 'git stash list'), /!!GitHub_Desktop<main>/);
+
+  const files = await git.getStashFiles(exec, dir, st.stash.sha);
+  assert.deepEqual(files.map((f) => [f.path, f.kind, !!f.untracked]), [['a.txt', 'modified', false], ['new file.txt', 'new', true]]);
+  assert.match((await git.getStashFileDiff(exec, dir, st.stash.sha, files[0])).text, /-one\n\+two/);
+  assert.match((await git.getStashFileDiff(exec, dir, st.stash.sha, files[1])).text, /\+fresh/);
+
+  // Another branch doesn't see it.
+  sh(dir, 'git switch -q -c other');
+  assert.equal((await git.getStatus(exec, dir)).stash, null);
+  sh(dir, 'git switch -q main');
+
+  await git.restoreStash(exec, dir, st.stash.sha);
+  st = await git.getStatus(exec, dir);
+  assert.equal(st.stash, null);
+  assert.deepEqual(st.files.map((f) => f.path), ['a.txt', 'new file.txt']);
+
+  await git.stashChanges(exec, dir, 'main');
+  const sha = (await git.getStatus(exec, dir)).stash.sha;
+  sh(dir, 'git stash push -q --include-untracked -m unrelated || true');
+  await git.dropStash(exec, dir, sha);
+  assert.equal((await git.getStatus(exec, dir)).stash, null);
+  await assert.rejects(git.dropStash(exec, dir, sha), /stash is gone/);
+});
+
+test('getLog search matches summary, author and sha prefix', async () => {
+  const dir = newRepo();
+  sh(dir, 'git commit -q --allow-empty -m "Fix login bug"');
+  sh(dir, 'git -c user.name="Jana Nováková" commit -q --allow-empty -m "Add cart"');
+  sh(dir, 'git commit -q --allow-empty -m "Update docs"');
+  const all = (await git.getLog(exec, dir)).commits;
+  const find = async (search, opts) => (await git.getLog(exec, dir, { search, ...opts })).commits.map((c) => c.summary);
+  assert.deepEqual(await find('LOGIN'), ['Fix login bug']);
+  assert.deepEqual(await find('jana'), ['Add cart']);
+  assert.deepEqual(await find(all[2].sha.slice(0, 7)), ['Fix login bug']);
+  assert.deepEqual(await find("it's \"odd\" $HOME"), []);
+  assert.deepEqual(await find('u', { skip: 1, limit: 1 }), ['Fix login bug']);
+});
+
+test('rename and delete branches', async () => {
+  const dir = newRepo();
+  sh(dir, 'git commit -q --allow-empty -m init && git branch feature && git branch wip && git switch -q wip && git commit -q --allow-empty -m "only here" && git switch -q main');
+  await git.renameBranch(exec, dir, 'feature', 'feature-2');
+  await git.deleteBranch(exec, dir, 'feature-2');
+  const err = await git.deleteBranch(exec, dir, 'wip').catch((e) => e);
+  assert.equal(err.unmerged, true);
+  await git.deleteBranch(exec, dir, 'wip', { force: true });
+  assert.deepEqual((await git.getBranches(exec, dir)).local.map((b) => b.name), ['main']);
+
+  // Remote deletion through a bare "origin".
+  const bare = join(root, `bare${n}`);
+  sh(root, `git init -q --bare ${bare}`);
+  sh(dir, `git remote add origin ${bare} && git push -q -u origin main && git switch -q -c topic && git push -q -u origin topic && git switch -q main`);
+  await git.deleteRemoteBranch(exec, dir, 'origin/topic');
+  assert.equal(sh(bare, 'git branch --list topic').trim(), '');
+});
+
+test('cloneRepo clones a URL and refuses an existing folder', async () => {
+  const src = newRepo();
+  sh(src, 'git commit -q --allow-empty -m init');
+  const target = join(root, 'clones', 'copy');
+  assert.equal(git.cloneName('https://github.com/a/my-app.git'), 'my-app');
+  assert.equal(git.cloneName('git@github.com:a/my-app.git'), 'my-app');
+  assert.equal(git.cloneName('a/my-app'), 'my-app');
+  await git.cloneRepo(exec, src, target);
+  assert.equal(sh(target, 'git log --format=%s').trim(), 'init');
+  await assert.rejects(git.cloneRepo(exec, src, target), /already exists/);
+});

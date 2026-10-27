@@ -80,6 +80,8 @@ ${PRINT_SEP}
 ${GIT} config user.name
 ${PRINT_SEP}
 ${GIT} config user.email
+${PRINT_SEP}
+${GIT} stash list --format='%gd%x1f%H%x1f%ct%x1f%gs' 2>/dev/null
 true`,
     ),
   );
@@ -87,7 +89,7 @@ true`,
 }
 
 export function parseStatus(raw) {
-  const [st = '', remotesRaw = '', fetched = '', stateRaw = '', userName = '', userEmail = ''] = raw.split(SEP);
+  const [st = '', remotesRaw = '', fetched = '', stateRaw = '', userName = '', userEmail = '', stashRaw = ''] = raw.split(SEP);
   const branch = { oid: null, head: null, upstream: null, ahead: 0, behind: 0 };
   const files = [];
   const parts = st.split('\0');
@@ -140,7 +142,64 @@ export function parseStatus(raw) {
     lastFetched: Number(fetched.trim()) || null,
     state: stateRaw.split('\n').filter(Boolean),
     user: { name: userName.trim(), email: userEmail.trim() },
+    stash: branch.head ? findStash(stashRaw, branch.head) : null,
   };
+}
+
+// ---------------------------------------------------------------- stash
+
+// The same marker GitHub Desktop uses, so stashes made in either app show up in both.
+const stashMarker = (branch) => `!!GitHub_Desktop<${branch}>`;
+
+/** The stash made for `branch` (one per branch, like GitHub Desktop). */
+function findStash(raw, branch) {
+  for (const line of raw.split('\n')) {
+    const [ref, sha, time, subject = ''] = line.split('\x1f');
+    if (sha && subject.endsWith(': ' + stashMarker(branch))) return { ref, sha, time: Number(time) };
+  }
+  return null;
+}
+
+/** Stashes every change, untracked files included, for `branch`. */
+// Without --literal-pathspecs: with it, git silently leaves untracked files out.
+export const stashChanges = (exec, repo, branch) =>
+  run(exec, inRepo(repo, `${GIT.replace(' --literal-pathspecs', '')} stash push -q --include-untracked -m ${q(stashMarker(branch))}`), 60);
+
+// By sha, so a stash made or dropped meanwhile can't shift which one is meant.
+const stashRef = (sha) => `ref=$(${GIT} reflog show --format='%gd %H' refs/stash | awk -v s=${q(sha)} '$2 == s { print $1; exit }')
+[ -n "$ref" ] || { echo 'The stash is gone.' >&2; exit 1; }`;
+
+export const restoreStash = (exec, repo, sha) =>
+  run(exec, inRepo(repo, `${stashRef(sha)}\n${GIT} stash pop -q "$ref"`), 60).catch((e) => {
+    if (/conflict|overwritten|already exists/i.test(e.message))
+      throw new GitError('The stash could not be restored over the current changes. Commit or discard them first; the stash is kept.');
+    throw e;
+  });
+
+export const dropStash = (exec, repo, sha) => run(exec, inRepo(repo, `${stashRef(sha)}\n${GIT} stash drop -q "$ref"`));
+
+/** Files in a stash; untracked ones live in its third parent. */
+export async function getStashFiles(exec, repo, sha) {
+  const out = await run(
+    exec,
+    inRepo(
+      repo,
+      `${GIT} diff --name-status -z -M ${q(sha + '^1')} ${q(sha)} || exit $?
+${PRINT_SEP}
+${GIT} ls-tree -r -z --name-only ${q(sha + '^3')} 2>/dev/null
+true`,
+    ),
+  );
+  const [tracked, untracked = ''] = out.split(SEP);
+  const files = parseNameStatus(tracked);
+  for (const path of untracked.split('\0').filter(Boolean)) files.push({ path, kind: 'new', untracked: true });
+  return files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+export function getStashFileDiff(exec, repo, sha, file) {
+  const paths = [file.path, file.orig].filter(Boolean).map(q).join(' ');
+  const to = file.untracked ? sha + '^3' : sha;
+  return diffOutput(exec, inRepo(repo, limited(`${GIT} diff --no-color --no-ext-diff -M ${q(sha + '^1')} ${q(to)} -- ${paths}`)));
 }
 
 function kindOf(xy) {
@@ -280,11 +339,23 @@ export function buildPartialPatch(diffText, excluded) {
 
 const LOG_FORMAT = '%H%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%P%x1f%D%x1e';
 
-export async function getLog(exec, repo, { skip = 0, limit = 100 } = {}) {
+// Matches the start of the sha, the author, email, summary or tags/branches,
+// ignoring case. git log can only AND --author with --grep, hence awk.
+const searchLog = (term, skip, limit) =>
+  `${GIT} log --format='${LOG_FORMAT}' HEAD -- | T=${q(term)} awk -F '\\037' -v skip=${Number(skip)} -v limit=${Number(limit)} '
+BEGIN { t = tolower(ENVIRON["T"]) }
+index(tolower($1), t) == 1 || index(tolower($3), t) || index(tolower($4), t) || index(tolower($6), t) || index(tolower($8), t) {
+  if (n++ >= skip) { print; if (++c >= limit) exit }
+}'`;
+
+export async function getLog(exec, repo, { skip = 0, limit = 100, search = '' } = {}) {
+  const listing = search
+    ? searchLog(search, skip, limit)
+    : `${GIT} log --format='${LOG_FORMAT}' -n ${Number(limit)} --skip ${Number(skip)} HEAD -- || exit $?`;
   const r = await exec(
     inRepo(
       repo,
-      `${GIT} log --format='${LOG_FORMAT}' -n ${Number(limit)} --skip ${Number(skip)} HEAD -- || exit $?
+      `${listing}
 ${PRINT_SEP}
 ${GIT} rev-list '@{upstream}..HEAD' 2>/dev/null
 true`,
@@ -444,6 +515,21 @@ export const checkoutPullRequest = (exec, repo, number) =>
   run(exec, inRepo(repo, `GH_PROMPT_DISABLED=1 gh pr checkout ${Number(number)}`), NET_TIMEOUT);
 
 export const createBranch = (exec, repo, name) => run(exec, inRepo(repo, `${GIT} switch -q -c ${q(name)}`), 60);
+
+export const renameBranch = (exec, repo, from, to) => run(exec, inRepo(repo, `${GIT} branch -m ${q(from)} ${q(to)}`));
+
+/** Without `force`, git refuses when the branch has unmerged commits. */
+export const deleteBranch = (exec, repo, name, { force = false } = {}) =>
+  run(exec, inRepo(repo, `${GIT} branch ${force ? '-D' : '-d'} ${q(name)}`)).catch((e) => {
+    if (/not fully merged/.test(e.message)) throw Object.assign(new GitError(e.message), { unmerged: true });
+    throw e;
+  });
+
+/** "origin/feature" → deletes feature on origin. */
+export function deleteRemoteBranch(exec, repo, upstream) {
+  const i = upstream.indexOf('/');
+  return run(exec, inRepo(repo, `${GIT} push -q ${q(upstream.slice(0, i))} --delete ${q(upstream.slice(i + 1))}`), NET_TIMEOUT);
+}
 
 /** How many commits `branch` would bring into HEAD. */
 export async function mergeCount(exec, repo, branch) {
@@ -621,6 +707,49 @@ exit $rc`,
     .trim();
   const [summary, ...rest] = text.split('\n');
   return { summary: summary.trim(), description: rest.join('\n').trim() };
+}
+
+/** Your GitHub repositories via `gh`, newest first; null without `gh`. */
+export async function listGitHubRepos(exec) {
+  const r = await exec(
+    `PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+command -v gh >/dev/null 2>&1 || exit 127
+GH_PROMPT_DISABLED=1 NO_COLOR=1 gh repo list --limit 200 --json nameWithOwner,description,isPrivate,updatedAt`,
+    60,
+  );
+  if (r.code === 127) return null;
+  return JSON.parse(must(r) || '[]');
+}
+
+/** "owner/name" or a URL → the folder name git clone would pick. */
+export const cloneName = (source) =>
+  source
+    .trim()
+    .replace(/\/+$/, '')
+    .replace(/\.git$/, '')
+    .split(/[/:]/)
+    .pop() || '';
+
+/**
+ * Clones `source` (a URL, or owner/name for GitHub) into `path`. owner/name
+ * goes through `gh` when it's there, so private repositories just work.
+ */
+export function cloneRepo(exec, source, path) {
+  const src = source.trim();
+  const short = /^[\w.-]+\/[\w.-]+$/.test(src);
+  return run(
+    exec,
+    `PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+[ -e ${qpath(path)} ] && { echo ${q(`${path} already exists.`)} >&2; exit 1; }
+mkdir -p "$(dirname ${qpath(path)})" || exit 1
+${
+  short
+    ? `if command -v gh >/dev/null 2>&1; then GH_PROMPT_DISABLED=1 gh repo clone ${q(src)} ${qpath(path)} -- -q
+else ${GIT} clone -q ${q(`https://github.com/${src}.git`)} ${qpath(path)}; fi`
+    : `${GIT} clone -q ${q(src)} ${qpath(path)}`
+}`,
+    1800,
+  );
 }
 
 /** Folders in `path` on the server, for the in-app folder browser. */

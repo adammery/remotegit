@@ -688,6 +688,7 @@ input[type="checkbox"]:focus-visible { box-shadow: 0 0 0 3px rgba(68, 147, 248, 
 .settings { display: flex; flex-direction: column; gap: 8px; padding: 12px; }
 .settings-label { font-weight: 600; color: var(--muted); font-size: 12px; }
 .segmented { display: flex; border: 1px solid var(--input-border); border-radius: 6px; overflow: hidden; }
+.segmented[hidden] { display: none; }
 .segmented button { flex: 1; height: 28px; border: 0; background: var(--input-bg); color: var(--text); }
 .segmented button + button { border-left: 1px solid var(--input-border); }
 .segmented button.active { background: var(--primary); color: #fff; font-weight: 600; }

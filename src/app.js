@@ -2790,6 +2790,8 @@ function serverModal(existing) {
     name.placeholder = local ? 'This computer' : 'My server';
   };
   fillKind();
+  // A saved server keeps its kind, so the switch only shows when adding one.
+  kind.hidden = !!existing;
 
   const readDraft = () => {
     const draft = local

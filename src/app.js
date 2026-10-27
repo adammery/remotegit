@@ -244,6 +244,7 @@ async function refresh() {
     if (headMoved) loadHeadCommit();
     const pushed = prev && (prev.branch.upstream !== st.branch.upstream || prev.branch.ahead !== st.branch.ahead);
     loadRemoteInfo(headMoved || pushed);
+    prefillMergeMessage();
     loadGitHubUser(S.server);
     if (S.tab === 'changes' && !S.stashView) await refreshDiff();
   } catch (e) {
@@ -443,7 +444,7 @@ async function doCommit(ev) {
   const summary = $('#summary').value.trim();
   const files = checkedFiles();
   const opts = store.commitOpts;
-  if (!summary || (!files.length && !opts.allowEmpty) || S.busy || !S.repo) return;
+  if (!summary || (!files.length && !opts.allowEmpty && !finishingOperation()) || S.busy || !S.repo) return;
   const coAuthors = $('#coauthors').hidden ? [] : git.parseCoAuthors($('#coauthors').value);
   if (coAuthors.includes(null))
     return toast('Write co-authors as @github-login or Name <email>, separated by commas.', 'error', 'Invalid co-author');
@@ -468,6 +469,7 @@ async function doCommit(ev) {
     S.excluded.clear();
     S.partial.clear();
     S.history.oid = undefined;
+    S.mergeMessageFor = null;
   });
 }
 
@@ -716,14 +718,22 @@ function renderChanges() {
   const banner = $('#state-banner');
   const state = S.status?.state || [];
   const conflicts = files.filter((f) => f.kind === 'conflicted').length;
+  const op = operationName(state);
   banner.hidden = !state.length && !conflicts;
-  banner.textContent = state.includes('REBASE')
-    ? 'A rebase is in progress on the server. Finish it there (git rebase --continue).'
-    : conflicts
-      ? `${conflicts} conflicted file${conflicts > 1 ? 's' : ''}. Resolve them, then commit to finish the merge.`
-      : state.length
-        ? `${state[0].replace('_HEAD', '').toLowerCase().replace('_', '-')} in progress — commit to finish it.`
-        : '';
+  banner.replaceChildren(
+    h(
+      'span',
+      { class: 'grow' },
+      state.includes('REBASE')
+        ? 'A rebase is in progress on the server. Finish it there (git rebase --continue).'
+        : conflicts
+          ? `${conflicts} conflicted file${conflicts > 1 ? 's' : ''}. Resolve them, then commit to finish the ${op}.`
+          : state.length
+            ? `${op[0].toUpperCase() + op.slice(1)} in progress — commit to finish it.`
+            : '',
+    ),
+    state.length && h('button', { class: 'btn btn-sm', type: 'button', disabled: !!S.busy, onclick: () => confirmAbort(op) }, `Abort ${op}`),
+  );
 
   const list = $('#file-list');
   const rows = shown.slice(0, MAX_ROWS).map((f) => fileRow(f));
@@ -742,9 +752,89 @@ function updateCommitButton() {
   const btn = $('#commit-btn');
   const branch = S.status?.branch.head || 'HEAD';
   const n = checkedFiles().length;
-  const what = n > 1 ? `Commit ${n} files to ` : 'Commit to ';
-  btn.replaceChildren(S.busy === 'Commit' ? 'Committing…' : what, S.busy === 'Commit' ? '' : h('b', {}, branch));
-  btn.disabled = !S.status || (!checkedFiles().length && !store.commitOpts.allowEmpty) || !$('#summary').value.trim() || !!S.busy;
+  const merging = finishingOperation();
+  const conflicts = currentFiles().filter((f) => f.kind === 'conflicted').length;
+  // A merge is committed whole, so the checkboxes don't count then.
+  const what = merging ? (conflicts ? `Resolve ${conflicts} conflict${conflicts > 1 ? 's' : ''} first` : `Commit ${operationName(S.status.state)} to `) : n > 1 ? `Commit ${n} files to ` : 'Commit to ';
+  btn.replaceChildren(S.busy === 'Commit' ? 'Committing…' : what, S.busy === 'Commit' || (merging && conflicts) ? '' : h('b', {}, branch));
+  btn.title = merging ? `Every change goes into the ${operationName(S.status.state)} commit.` : '';
+  btn.disabled = !S.status || (merging ? conflicts > 0 : !checkedFiles().length && !store.commitOpts.allowEmpty) || !$('#summary').value.trim() || !!S.busy;
+}
+
+// ============================================================ merges and conflicts
+
+const finishingOperation = () => (S.status?.state || []).some((s) => s !== 'REBASE');
+const operationName = (state) =>
+  state.includes('REBASE') ? 'rebase' : state.includes('CHERRY_PICK_HEAD') ? 'cherry-pick' : state.includes('REVERT_HEAD') ? 'revert' : 'merge';
+
+function confirmAbort(op) {
+  confirmModal({
+    title: `Abort the ${op}?`,
+    message: `The files go back to how they were before the ${op}. Conflicts you already resolved are lost.`,
+    confirm: `Abort ${op}`,
+    danger: true,
+    onConfirm: () =>
+      withBusy(`Abort ${op}`, async () => {
+        await git.abortOperation(ex, S.repo.path, S.status.state);
+        S.mergeMessageFor = null;
+        $('#summary').value = '';
+        $('#description').value = '';
+      }),
+  });
+}
+
+// Fills in git's prepared message ("Merge branch 'x'") once per merge, like GitHub Desktop.
+async function prefillMergeMessage() {
+  const st = S.status;
+  const key = st && finishingOperation() ? `${S.repo.id}:${st.branch.oid}` : null;
+  if (!key || S.mergeMessageFor === key || $('#summary').value.trim()) return;
+  S.mergeMessageFor = key;
+  const msg = await git.getMergeMessage(ex, S.repo.path).catch(() => '');
+  S.mergeTheirs = /^Merge (?:remote-tracking )?branch '([^']+)'/.exec(msg)?.[1] || null;
+  if (!msg || $('#summary').value.trim() || S.status !== st) return;
+  const [summary, ...rest] = msg.split('\n');
+  $('#summary').value = summary;
+  $('#description').value = rest.join('\n').trim();
+  updateCommitButton();
+}
+
+function conflictBar(file) {
+  const st = S.status;
+  const rebasing = st.state.includes('REBASE');
+  const text = S.diff?.key?.startsWith(file.path + '\0') ? S.diff.text || '' : null;
+  const markers = text == null ? null : /^\+(<<<<<<<|>>>>>>>)( |$)/m.test(text);
+  const mine = st.branch.head || 'HEAD';
+  // The marker label, or the branch from "Merge branch 'x'" once the markers are gone.
+  const label = /^\+>>>>>>> (.+)$/m.exec(text || '')?.[1]?.trim() || S.mergeTheirs || 'theirs';
+  const theirs = label.length > 24 ? label.slice(0, 23) + '…' : label;
+  const busy = !!S.busy;
+  const take = (side) => withBusy('Resolve', () => git.useConflictSide(ex, S.repo.path, file.path, side, rebasing));
+  return h(
+    'div',
+    { class: 'conflict-bar' },
+    h('div', { class: 'grow' }, markers === false ? 'No conflict markers left. Review the result below, then mark the file as resolved.' : 'This file has conflicts. Keep one side, let AI combine both, or edit it and mark it as resolved.'),
+    h(
+      'div',
+      { class: 'conflict-actions' },
+      h('button', { class: 'btn btn-sm', type: 'button', disabled: busy, title: `Keep ${mine}'s version of the file`, onclick: () => take('mine') }, `Use mine (${mine})`),
+      h('button', { class: 'btn btn-sm', type: 'button', disabled: busy, title: `Keep ${theirs}'s version of the file`, onclick: () => take('theirs') }, `Use theirs (${theirs})`),
+      h('button', { class: 'btn btn-sm', type: 'button', disabled: busy || markers !== true, title: 'Claude Code or Codex on the server combines both sides; you review it before marking it resolved', onclick: (e) => resolveWithAi(e.currentTarget, file, mine, theirs) }, h('span', { html: icons.sparkle }), 'Resolve with AI'),
+      h('button', { class: 'btn btn-sm' + (markers === false ? ' btn-primary' : ''), type: 'button', disabled: busy || markers !== false, title: markers ? 'Remove the conflict markers first' : '', onclick: () => withBusy('Resolve', () => git.markResolved(ex, S.repo.path, file.path)) }, 'Mark as resolved'),
+    ),
+  );
+}
+
+async function resolveWithAi(btn, file, ours, theirs) {
+  const tools = await git.findAiTools(ex).catch(() => []);
+  if (!tools.length) return toast('Install Claude Code or Codex on the server and sign in there once.', 'error', 'No AI found on the server');
+  const run = (tool) =>
+    withBusy('Resolving with AI', async () => {
+      if (!(await git.resolveConflictWithAi(ex, S.repo.path, file.path, { ours, theirs, tool }))) throw new Error('That AI is no longer on the server.');
+      toast('Check the result in the diff, then click “Mark as resolved”.', 'info', `${file.path} has no conflicts left`);
+    });
+  if (tools.length === 1) return run(tools[0].id);
+  const r = btn.getBoundingClientRect();
+  openMenu(r.left, r.bottom + 4, [{ label: 'Resolve with', disabled: true }, ...tools.map((t) => ({ label: t.name, run: () => run(t.id) }))]);
 }
 
 // Keeps punctuation in place inside left-truncating (rtl) path labels.
@@ -863,6 +953,7 @@ function contentView() {
   if (!file) return noChangesView();
   return [
     h('div', { class: 'diff-header' }, h('span', { class: `file-status ${file.kind}`, html: fileIcon(file.kind) }), h('span', { class: 'path' }, ltr(file.orig ? `${file.orig} → ${file.path}` : file.path))),
+    file.kind === 'conflicted' && conflictBar(file),
     diffView(S.diff, file, file.path, {
       before: hasHead() && file.xy !== '??' && file.xy[0] !== 'A' ? { rev: 'HEAD', path: file.orig || file.path } : null,
       after: file.kind === 'deleted' ? null : { worktree: file.path },

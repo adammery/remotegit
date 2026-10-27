@@ -752,3 +752,12 @@ kbd { font: 12px var(--mono); padding: 1px 6px; border: 1px solid var(--border);
 .image-side.add .image-frame { border-color: var(--st-new); }
 .image-frame img { max-width: 100%; max-height: 60vh; object-fit: contain; }
 .image-caption { color: var(--muted); font-size: 12px; text-align: center; }
+
+#state-banner:not([hidden]) { display: flex; align-items: center; gap: 8px; }
+#state-banner .grow { flex: 1; min-width: 0; }
+#state-banner .btn { flex: none; }
+.conflict-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--st-conflicted) 12%, transparent); font-size: 12px; flex: none; }
+.conflict-bar .grow { flex: 1 1 240px; min-width: 0; }
+.conflict-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.conflict-actions .btn { display: inline-flex; align-items: center; gap: 4px; }
+.conflict-actions .btn svg { width: 12px; height: 12px; }

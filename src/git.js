@@ -600,6 +600,8 @@ export const cherryPick = (exec, repo, sha, branch) =>
 
 // -------------------------------------------------------------- changes
 
+const inProgress = `{ d=$(${GIT} rev-parse --git-dir); [ -e "$d/MERGE_HEAD" ] || [ -e "$d/CHERRY_PICK_HEAD" ] || [ -e "$d/REVERT_HEAD" ]; }`;
+
 /**
  * Commits exactly the checked files, ignoring whatever was staged before —
  * the same model GitHub Desktop uses.
@@ -618,14 +620,21 @@ export async function commit(
     exec,
     inRepo(
       repo,
-      [
-        `${GIT} reset -q`,
-        all ? `${GIT} add -A` : paths.length ? `${GIT} add -A -- ${paths.join(' ')}` : 'true',
-        // Files with only some lines selected arrive as patches for the index.
-        ...patches.map((patch) => `printf '%s' ${q(patch)} | ${GIT} apply --cached --recount --whitespace=nowarn -`),
-        `printf '%s' ${q(message)} | ${GIT} commit -q ${flags} -F -`,
-        `${GIT} rev-parse HEAD`,
-      ].join(' &&\n'),
+      // A merge (or cherry-pick/revert) in progress is committed whole: `git
+      // reset` would forget MERGE_HEAD and turn it into an ordinary commit.
+      `if ${inProgress}; then
+  ${GIT} ls-files -u | grep -q . && { echo 'Resolve the conflicted files first.' >&2; exit 1; }
+  ${GIT} add -A || exit $?
+else
+${[
+  `${GIT} reset -q`,
+  all ? `${GIT} add -A` : paths.length ? `${GIT} add -A -- ${paths.join(' ')}` : 'true',
+  // Files with only some lines selected arrive as patches for the index.
+  ...patches.map((patch) => `printf '%s' ${q(patch)} | ${GIT} apply --cached --recount --whitespace=nowarn -`),
+].join(' &&\n')} || exit $?
+fi
+printf '%s' ${q(message)} | ${GIT} commit -q ${flags} -F - &&
+${GIT} rev-parse HEAD`,
     ),
     120,
   );
@@ -667,7 +676,14 @@ for t in ${AI_TOOLS.map((t) => t.id).join(' ')}; do command -v "$t" >/dev/null 2
  * expression) and the output of `input` (shell commands) on stdin. The reply is
  * split into its first line and the rest; null when the tool isn't installed.
  */
-async function askAi(exec, repo, tool, { setup = '', prompt, input }) {
+async function askAi(exec, repo, tool, opts) {
+  const text = await askAiText(exec, repo, tool, opts);
+  if (text == null) return null;
+  const [summary, ...rest] = text.split('\n');
+  return { summary: summary.trim(), description: rest.join('\n').trim() };
+}
+
+async function askAiText(exec, repo, tool, { setup = '', prompt, input }) {
   const r = await exec(
     inRepo(
       repo,
@@ -694,12 +710,10 @@ exit $rc`,
     240,
   );
   if (r.code === 127) return null;
-  const text = must(r)
+  return must(r)
     .trim()
     .replace(/^```\w*\n?|\n?```$/g, '')
     .trim();
-  const [summary, ...rest] = text.split('\n');
-  return { summary: summary.trim(), description: rest.join('\n').trim() };
 }
 
 /**
@@ -835,6 +849,61 @@ export const ignorePath = (exec, repo, path) =>
 printf '%s\\n' ${q('/' + path)} >> .gitignore`,
     ),
   );
+
+// ------------------------------------------------------------ conflicts
+
+const MARKERS = /^(<<<<<<<|>>>>>>>)( |$)/m;
+export const hasConflictMarkers = (text) => MARKERS.test(text);
+
+/**
+ * Takes one side of a conflicted file and marks it resolved. `side` is 'mine'
+ * or 'theirs'; during a rebase git's --ours is the branch being rebased onto,
+ * so the flags swap. A side that deleted the file deletes it.
+ */
+export function useConflictSide(exec, repo, path, side, rebasing = false) {
+  const flag = (side === 'mine') !== rebasing ? '--ours' : '--theirs';
+  return run(
+    exec,
+    inRepo(repo, `if ${GIT} checkout ${flag} -- ${q(path)} 2>/dev/null; then ${GIT} add -- ${q(path)}; else ${GIT} rm -q -- ${q(path)}; fi`),
+  );
+}
+
+export const markResolved = (exec, repo, path) => run(exec, inRepo(repo, `${GIT} add -- ${q(path)}`));
+
+/** Stops the merge, cherry-pick, revert or rebase in progress. */
+export function abortOperation(exec, repo, state) {
+  const cmd = state.includes('REBASE') ? 'rebase' : state.includes('CHERRY_PICK_HEAD') ? 'cherry-pick' : state.includes('REVERT_HEAD') ? 'revert' : 'merge';
+  return run(exec, inRepo(repo, `${GIT} ${cmd} --abort`), 60);
+}
+
+/** The prepared message of a merge in progress (git's MERGE_MSG), or ''. */
+export async function getMergeMessage(exec, repo) {
+  const r = await exec(inRepo(repo, `f=$(${GIT} rev-parse --git-path MERGE_MSG) && [ -f "$f" ] && grep -v '^#' "$f"`));
+  return r.code === 0 ? r.stdout.trim() : '';
+}
+
+const AI_FILE_LIMIT = 200_000;
+
+/**
+ * Lets `tool` rewrite a conflicted file without its conflict markers. The file
+ * stays unresolved in git so the result can be reviewed first. Returns false
+ * when the tool isn't installed.
+ */
+export async function resolveConflictWithAi(exec, repo, path, { ours, theirs, tool }) {
+  const file = await exec(inRepo(repo, `wc -c < ${q(path)} | tr -d ' '; ${PRINT_SEP}; tail -c 1 ${q(path)} | od -An -c`));
+  const [size, last = ''] = must(file).split(SEP);
+  if (Number(size) > AI_FILE_LIMIT) throw new GitError('This file is too large to resolve with AI. Pick a side or resolve it in an editor.');
+  const prompt =
+    `The file "${path}" on stdin contains git conflict markers between "${ours}" (between <<<<<<< and =======) and "${theirs}" (between ======= and >>>>>>>). ` +
+    'Resolve every conflict: keep what both sides intended and combine them where they don\'t contradict. Use only that file, do not run commands. ' +
+    'Reply with only the complete resolved file content, nothing before or after it, no code fences.';
+  const text = await askAiText(exec, repo, tool, { prompt: q(prompt), input: `cat ${q(path)};` });
+  if (text == null) return false;
+  if (!text.trim() || hasConflictMarkers(text)) throw new GitError('The AI answer still had conflict markers, so the file was left as it was.');
+  const content = last.includes('\\n') ? text.replace(/\n*$/, '\n') : text;
+  await run(exec, inRepo(repo, `printf '%s' ${q(content)} > ${q(path)}`));
+  return true;
+}
 
 // ------------------------------------------------------ CI and pull requests
 

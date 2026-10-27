@@ -46,6 +46,7 @@ RemoteGit checks for new versions on its own and shows a popup with **Install an
 - Branch list with Default, Recent and Other branches, plus remote branches; create a new branch.
 - Right-click a branch to switch to it, **rename** it, copy its name, view it on GitHub or **delete** it (optionally on the remote too; unmerged commits get a warning first).
 - **Merge** another branch into the current one (merge commit or squash) from the bottom of the branch list.
+- **Conflicts**: a conflicted file offers **Use mine**, **Use theirs**, **Resolve with AI** (Claude Code or Codex on the server combines both sides; you review the diff before marking it resolved) and **Mark as resolved**. The banner has **Abort merge**, and the merge is committed whole with git's prepared message, keeping both parents.
 - **Pull Requests** tab: open PRs from the GitHub CLI on the server, with their CI status; click one to check it out.
 - **Create Pull Request** (from the ▾ next to Fetch/Push, the no-changes screen or `⌘⇧R`): base branch, title, description, draft, and ✨ to have the AI write the title and description. Unpushed commits are pushed first. Once it exists, the same places offer **View Pull Request**.
 - **CI status**: a ✓ / ✗ / ● next to the branch name for the pushed tip, and next to the commit open in History; click it for each check with a link to its run. It comes from GitHub Actions and commit statuses via `gh`, and is polled only while the window has focus (every 30 s while checks run, otherwise every 2 min).
@@ -178,7 +179,7 @@ Layout:
 
 ## Not supported yet
 
-Password login (keys only), resolving merge conflicts inside the app (conflicts are shown; resolve them in an editor, then commit), reordering commits, signing commits with a passphrase-protected key.
+Password login (keys only), editing a conflicted file inside the app (pick a side, use AI, or edit it in your editor), rebasing from the app, reordering commits, signing commits with a passphrase-protected key.
 
 ## License
 

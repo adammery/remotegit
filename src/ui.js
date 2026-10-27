@@ -75,7 +75,8 @@ export const targetOf = (s) => ({
 
 /** Like GitHub Desktop: the newest commit can be undone until it is pushed. */
 export function undoable(status, head) {
-  if (!status || !head || head.sha !== status.branch.oid || !status.branch.head) return null;
+  // Not in the middle of a merge, cherry-pick, revert or rebase.
+  if (!status || !head || head.sha !== status.branch.oid || !status.branch.head || status.state?.length) return null;
   return !status.branch.upstream || status.branch.ahead > 0 ? head : null;
 }
 

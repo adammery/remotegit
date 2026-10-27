@@ -602,3 +602,64 @@ test('generatePullRequest sends the commits and diff to the AI', async () => {
   assert.match(input, /-one\n\+two/);
   rmSync(join(bin, 'claude'));
 });
+
+const conflictRepo = () => {
+  const dir = newRepo();
+  writeFileSync(join(dir, 'f.txt'), 'a\nb\nc\n');
+  writeFileSync(join(dir, 'g.txt'), 'g\n');
+  sh(dir, 'git add -A && git commit -qm base && git switch -q -c other');
+  writeFileSync(join(dir, 'f.txt'), 'a\nTHEIRS\nc\n');
+  writeFileSync(join(dir, 'g.txt'), 'g2\n');
+  sh(dir, 'git commit -qam theirs && git switch -q main');
+  writeFileSync(join(dir, 'f.txt'), 'a\nMINE\nc\n');
+  sh(dir, 'git commit -qam mine && git merge other -q || true');
+  return dir;
+};
+
+test('conflicts: pick a side, then the merge commit keeps both parents', async () => {
+  const dir = conflictRepo();
+  let st = await git.getStatus(exec, dir);
+  assert.ok(st.state.includes('MERGE_HEAD'));
+  assert.equal(st.files.find((f) => f.path === 'f.txt').kind, 'conflicted');
+  assert.match(await git.getMergeMessage(exec, dir), /^Merge branch 'other'/);
+  // Committing with a conflict left is refused instead of committing the markers.
+  await assert.rejects(git.commit(exec, dir, { files: st.files, summary: 'Merge' }), /Resolve the conflicted files first/);
+
+  await git.useConflictSide(exec, dir, 'f.txt', 'theirs');
+  assert.equal(readFileSync(join(dir, 'f.txt'), 'utf8'), 'a\nTHEIRS\nc\n');
+  st = await git.getStatus(exec, dir);
+  assert.equal(st.files.some((f) => f.kind === 'conflicted'), false);
+  // Only one file checked: a merge still goes in whole.
+  await git.commit(exec, dir, { files: st.files.filter((f) => f.path === 'f.txt'), summary: "Merge branch 'other'" });
+  assert.equal(sh(dir, 'git log -1 --format=%P').trim().split(' ').length, 2);
+  assert.equal(sh(dir, 'git show HEAD:g.txt'), 'g2\n');
+  assert.equal(sh(dir, 'git status --porcelain'), '');
+});
+
+test('conflicts: use mine, abort, and AI resolution', async () => {
+  let dir = conflictRepo();
+  await git.useConflictSide(exec, dir, 'f.txt', 'mine');
+  assert.equal(readFileSync(join(dir, 'f.txt'), 'utf8'), 'a\nMINE\nc\n');
+  await git.abortOperation(exec, dir, (await git.getStatus(exec, dir)).state);
+  assert.equal((await git.getStatus(exec, dir)).state.length, 0);
+
+  dir = conflictRepo();
+  const bin = join(root, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, 'claude'), `#!/bin/sh\ncat > ${root}/ai-conflict-in\nprintf 'a\\nMINE and THEIRS\\nc'\n`, { mode: 0o755 });
+  assert.equal(await git.resolveConflictWithAi(exec, dir, 'f.txt', { ours: 'main', theirs: 'other', tool: 'claude' }), true);
+  assert.match(readFileSync(join(root, 'ai-conflict-in'), 'utf8'), /<<<<<<< HEAD\nMINE\n=======\nTHEIRS\n>>>>>>> other/);
+  assert.equal(readFileSync(join(dir, 'f.txt'), 'utf8'), 'a\nMINE and THEIRS\nc\n'); // trailing newline kept
+  // Left for review: still unmerged until marked resolved.
+  assert.equal((await git.getStatus(exec, dir)).files.find((f) => f.path === 'f.txt').kind, 'conflicted');
+  await git.markResolved(exec, dir, 'f.txt');
+  assert.equal((await git.getStatus(exec, dir)).files.find((f) => f.path === 'f.txt').kind, 'modified');
+
+  // An answer that still has markers is rejected and the file is untouched.
+  dir = conflictRepo();
+  writeFileSync(join(bin, 'claude'), `#!/bin/sh\ncat >/dev/null\nprintf '<<<<<<< HEAD\\nx\\n=======\\ny\\n>>>>>>> other\\n'\n`, { mode: 0o755 });
+  await assert.rejects(git.resolveConflictWithAi(exec, dir, 'f.txt', { ours: 'main', theirs: 'other', tool: 'claude' }), /conflict markers/);
+  assert.match(readFileSync(join(dir, 'f.txt'), 'utf8'), /<<<<<<< HEAD/);
+  rmSync(join(bin, 'claude'));
+  assert.equal(await git.resolveConflictWithAi(exec, dir, 'f.txt', { ours: 'main', theirs: 'other', tool: 'claude' }), false);
+});

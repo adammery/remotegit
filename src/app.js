@@ -1,6 +1,6 @@
 import * as git from './git.js';
 import { icons, fileIcon } from './icons.js';
-import { h, ago, targetOf, undoable as undoableCommit, openMenu, closeMenu, readKey, setShowInMenuBar, setMenuBarOnly, STORE_KEY, TRAY_KEY } from './ui.js';
+import { h, ago, targetOf, undoable as undoableCommit, openMenu, closeMenu, repoLabel, readKey, setShowInMenuBar, setMenuBarOnly, STORE_KEY, TRAY_KEY } from './ui.js';
 
 const tauri = window.__TAURI__;
 
@@ -605,20 +605,18 @@ function confirmDiscard(files) {
   });
 }
 
-function vscodeUrl() {
-  const s = S.server;
-  if (s.local) return `vscode://file${S.repo.path.startsWith('/') ? '' : '/'}${encodeURI(S.repo.path)}`;
+function vscodeUrl(repo = S.repo, s = S.server) {
+  if (s.local) return `vscode://file${repo.path.startsWith('/') ? '' : '/'}${encodeURI(repo.path)}`;
   const host = (s.user ? `${s.user}@` : '') + s.host;
-  return `vscode://vscode-remote/ssh-remote+${encodeURI(host)}${encodeURI(S.repo.path)}`;
+  return `vscode://vscode-remote/ssh-remote+${encodeURI(host)}${encodeURI(repo.path)}`;
 }
 
-function sshCommand() {
-  const s = S.server;
+function sshCommand(repo = S.repo, s = S.server) {
   const parts = ['ssh', '-t'];
   if (s.port) parts.push('-p', String(s.port));
   if (s.identityFile) parts.push('-i', JSON.stringify(s.identityFile));
   parts.push((s.user ? `${s.user}@` : '') + s.host);
-  parts.push(`"cd ${git.q(S.repo.path)} && exec bash -l"`);
+  parts.push(`"cd ${git.q(repo.path)} && exec bash -l"`);
   return parts.join(' ');
 }
 
@@ -651,7 +649,7 @@ function renderConn() {
 
 function renderToolbar() {
   const st = S.status;
-  $('#tb-repo-name').textContent = S.repo ? S.repo.name : 'None';
+  $('#tb-repo-name').textContent = S.repo ? repoLabel(S.repo) : 'None';
   $('#tb-repo').title = S.repo ? `${S.server?.name || S.server?.host}:${S.repo.path}` : '';
 
   const branchBtn = $('#tb-branch');
@@ -1287,7 +1285,7 @@ function repoPopover() {
       const term = filter.value.toLowerCase();
       const shown = filterServer();
       const groups = (shown ? [shown] : store.servers).map((s) => {
-        const repos = store.repos.filter((r) => r.serverId === s.id && (r.name + r.path).toLowerCase().includes(term));
+        const repos = store.repos.filter((r) => r.serverId === s.id && (repoLabel(r) + r.name + r.path).toLowerCase().includes(term));
         return [
           h(
             'div',
@@ -1300,9 +1298,9 @@ function repoPopover() {
             ? repos.map((r) =>
                 h(
                   'div',
-                  { class: 'pop-item' + (r.id === S.repo?.id ? ' current' : ''), onclick: () => { closePopover(); selectRepo(r.id); } },
+                  { class: 'pop-item' + (r.id === S.repo?.id ? ' current' : ''), onclick: () => { closePopover(); selectRepo(r.id); }, oncontextmenu: (e) => repoMenu(e, r) },
                   h('span', { html: icons.repo }),
-                  h('div', { class: 'grow' }, h('div', { class: 'title' }, r.name), h('div', { class: 'sub' }, r.path)),
+                  h('div', { class: 'grow' }, h('div', { class: 'title' }, repoLabel(r)), h('div', { class: 'sub' }, r.path)),
                   h('button', { class: 'btn-icon', type: 'button', title: 'Remove from list (keeps files)', html: icons.x, onclick: (e) => { e.stopPropagation(); removeRepo(r); fill(); } }),
                 ),
               )
@@ -1502,7 +1500,7 @@ function branchPopover(initialTab = 'branches') {
       const section = (title, list) => {
         list = list.filter((b) => b && match(b) && !shown.has(b.name));
         list.forEach((b) => shown.add(b.name));
-        return list.length ? [h('div', { class: 'pop-group' }, title), list.slice(0, 300).map((b) => branchItem(b.name, b.time, () => switchBranch(b.name, false), (e) => branchMenu(e, b, branches)))] : [];
+        return list.length ? [h('div', { class: 'pop-group' }, title), list.slice(0, 300).map((b) => branchItem(b.name, b.time, () => switchBranch(b.name, false), (e) => branchMenu(e, b, !!b.upstream && branches.remote.some((r) => r.name === b.upstream))))] : [];
       };
       const localNames = new Set(branches.local.map((b) => b.name));
       const remote = branches.remote.filter((b) => match(b) && !localNames.has(b.name.slice(b.name.indexOf('/') + 1)));
@@ -1819,6 +1817,160 @@ function stashAll() {
   });
 }
 
+// ============================================================ repository menu
+
+function repoMenu(e, repo) {
+  e.preventDefault();
+  e.stopPropagation();
+  const server = store.servers.find((s) => s.id === repo.serverId);
+  if (!server) return;
+  const run = (script, t) => execOn(server, script, t);
+  openMenu(e.clientX, e.clientY, [
+    { label: repo.alias ? 'Change Alias…' : 'Create Alias…', run: () => { closePopover(); aliasModal(repo); } },
+    repo.alias && { label: 'Remove Alias', run: () => setAlias(repo, '') },
+    { label: 'Show Worktrees', run: () => { closePopover(); worktreesModal(repo, server); } },
+    { label: 'New Worktree…', run: () => { closePopover(); newWorktreeModal(repo, server); } },
+    '-',
+    { label: 'Copy Repo Name', run: () => copyText(repo.name) },
+    { label: 'Copy Repo Path', run: () => copyText(repo.path) },
+    '-',
+    {
+      label: 'View on GitHub',
+      run: async () => {
+        const r = await run(`cd ${git.qpath(repo.path)} && git remote get-url origin`).catch(() => null);
+        const web = git.webUrl(r?.stdout.trim());
+        web ? openExternal(web) : toast('This repository has no origin remote on a known host.', 'info', 'Nothing to open');
+      },
+    },
+    server.local
+      ? isMac && { label: 'Open in Terminal', run: () => tauri.opener?.openPath(repo.path, 'Terminal').catch((err) => toast(String(err), 'error')) }
+      : { label: 'Copy SSH Command', run: () => copyText(sshCommand(repo, server)) },
+    server.local && { label: isMac ? 'Reveal in Finder' : 'Show in Explorer', run: () => tauri.opener?.revealItemInDir(repo.path).catch((err) => toast(String(err), 'error')) },
+    { label: 'Open in Visual Studio Code', run: () => openExternal(vscodeUrl(repo, server)) },
+    '-',
+    {
+      label: 'Remove…',
+      danger: true,
+      run: () => {
+        closePopover();
+        confirmModal({
+          title: `Remove ${repoLabel(repo)}?`,
+          message: `It is removed from RemoteGit only. The folder stays ${server.local ? 'on this computer' : 'on the server'}.`,
+          confirm: 'Remove',
+          danger: true,
+          onConfirm: () => removeRepo(repo),
+        });
+      },
+    },
+  ]);
+}
+
+function setAlias(repo, alias) {
+  const r = store.repos.find((x) => x.id === repo.id);
+  if (!r) return;
+  if (alias && alias !== r.name) r.alias = alias;
+  else delete r.alias;
+  store.repos.sort((a, b) => repoLabel(a).localeCompare(repoLabel(b)));
+  save();
+  renderToolbar();
+}
+
+function aliasModal(repo) {
+  const input = h('input', { value: repoLabel(repo), spellcheck: false });
+  let closeFn;
+  const submit = () => {
+    setAlias(repo, input.value.trim());
+    closeFn();
+  };
+  input.addEventListener('keydown', (e) => e.key === 'Enter' && submit());
+  closeFn = openModal({
+    title: 'Repository alias',
+    body: field('Alias', input, `Shown instead of “${repo.name}” in RemoteGit. Leave it empty to use the folder name.`),
+    foot: (close) => [h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'), h('button', { class: 'btn btn-primary', type: 'button', onclick: submit }, 'Save')],
+  });
+  input.select();
+}
+
+async function worktreesModal(repo, server) {
+  const run = (script, t) => execOn(server, script, t);
+  const list = h('div', { class: 'repo-scan' }, h('div', { class: 'pop-empty' }, 'Loading worktrees…'));
+  openModal({
+    title: `Worktrees of ${repoLabel(repo)}`,
+    wide: true,
+    body: [list],
+    foot: (close) => [
+      h('button', { class: 'btn left', type: 'button', onclick: () => { close(); newWorktreeModal(repo, server); } }, 'New Worktree…'),
+      h('button', { class: 'btn', type: 'button', onclick: close }, 'Close'),
+    ],
+  });
+  try {
+    const trees = await git.listWorktrees(run, repo.path);
+    list.replaceChildren(
+      ...trees.map((t) => {
+        const known = store.repos.find((r) => r.serverId === server.id && r.path === t.path);
+        return h(
+          'div',
+          { class: 'pop-item' + (known?.id === S.repo?.id ? ' current' : '') },
+          h('span', { html: icons.branch }),
+          h('div', { class: 'grow' }, h('div', { class: 'title' }, t.branch || (t.bare ? 'bare' : `detached at ${t.sha?.slice(0, 7)}`)), h('div', { class: 'sub' }, t.path)),
+          h(
+            'button',
+            { class: 'btn btn-sm', type: 'button', onclick: () => { $('#modal-root').replaceChildren(); addRepos(server, [t.path]); } },
+            known ? 'Open' : 'Add to RemoteGit',
+          ),
+        );
+      }),
+    );
+  } catch (e) {
+    list.replaceChildren(h('div', { class: 'pop-empty' }, h('div', { class: 'error-box' }, e.message)));
+  }
+}
+
+function newWorktreeModal(repo, server) {
+  const run = (script, t) => execOn(server, script, t);
+  const parent = repo.path.replace(/\/[^/]+\/?$/, '') || '~';
+  const branch = h('input', { placeholder: 'feature/my-change', spellcheck: false, list: 'worktree-branches' });
+  const options = h('datalist', { id: 'worktree-branches' });
+  const path = h('input', { spellcheck: false });
+  const error = h('div', { class: 'form-error' });
+  const btn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Create worktree');
+  let edited = false;
+  const update = () => {
+    if (!edited) path.value = `${parent}/${repo.name}-${branch.value.trim().replace(/[^\w.-]+/g, '-') || 'worktree'}`;
+  };
+  branch.addEventListener('input', update);
+  path.addEventListener('input', () => (edited = true));
+  git.getBranches(run, repo.path).then((b) => options.replaceChildren(...b.local.map((x) => h('option', { value: x.name }))), () => {});
+  const closeFn = openModal({
+    title: 'New worktree',
+    wide: true,
+    body: [
+      h('p', { class: 'hint', style: 'margin:0 0 10px' }, 'A second working folder of the same repository, on its own branch: work on two branches at once without stashing.'),
+      field('Branch', branch, 'An existing branch, or a new one that starts at the current commit.'),
+      options,
+      h('label', { class: 'field' }, h('span', {}, 'Folder'), h('div', { class: 'input-row' }, path, h('button', { class: 'btn', type: 'button', onclick: () => folderBrowser(server, parent, (p) => { edited = false; path.value = `${p}/${repo.name}-${branch.value.trim().replace(/[^\w.-]+/g, '-') || 'worktree'}`; }) }, h('span', { html: icons.folder }), 'Choose…'))),
+      error,
+    ],
+    foot: (close) => [h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'), btn],
+  });
+  update();
+  btn.addEventListener('click', async () => {
+    const name = branch.value.trim().replace(/\s+/g, '-');
+    if (!name || !path.value.trim()) return (error.textContent = 'Enter a branch and a folder.');
+    btn.disabled = true;
+    error.textContent = '';
+    try {
+      await git.addWorktree(run, repo.path, path.value.trim(), name);
+      const top = await git.resolveRepo(run, path.value.trim());
+      closeFn();
+      addRepos(server, [top]);
+    } catch (e) {
+      error.textContent = e.message;
+      btn.disabled = false;
+    }
+  });
+}
+
 // ============================================================ CI and pull requests
 
 const ciLabel = { success: 'All checks have passed', failure: 'Some checks were not successful', pending: 'Checks are running' };
@@ -2053,21 +2205,22 @@ const formatSize = (n) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024)
 
 // ============================================================ branch actions
 
-function branchMenu(e, b, branches) {
+function branchMenu(e, b, onRemote) {
   e.preventDefault();
   e.stopPropagation();
   const st = S.status;
   const isCurrent = b.name === st.branch.head;
   const web = git.webUrl(st.remote?.url);
   const remoteName = b.upstream?.slice(b.upstream.indexOf('/') + 1);
-  const onRemote = !!b.upstream && branches.remote.some((r) => r.name === b.upstream);
+  // Like GitHub Desktop, the current branch can go too: switch to the default one first.
+  const fallback = isCurrent ? S.remote.defaultBranch : null;
   openMenu(e.clientX, e.clientY, [
     !isCurrent && { label: 'Switch to Branch', disabled: !!S.busy, run: () => switchBranch(b.name, false) },
     { label: 'Rename…', disabled: !!S.busy, run: () => { closePopover(); renameBranchModal(b); } },
     { label: 'Copy Branch Name', run: () => copyText(b.name) },
     web && onRemote && { label: new URL(web).hostname === 'github.com' ? 'View Branch on GitHub' : 'View Branch on the Web', run: () => openExternal(`${web}/tree/${remoteName.split('/').map(encodeURIComponent).join('/')}`) },
     '-',
-    { label: isCurrent ? 'Delete… (switch to another branch first)' : 'Delete…', danger: true, disabled: isCurrent || !!S.busy, run: () => { closePopover(); deleteBranchModal(b, onRemote); } },
+    { label: 'Delete…', danger: true, disabled: (isCurrent && (!fallback || fallback === b.name)) || !!S.busy, run: () => { closePopover(); deleteBranchModal(b, onRemote, fallback); } },
   ]);
 }
 
@@ -2104,10 +2257,10 @@ function renameBranchModal(b) {
   input.select();
 }
 
-function deleteBranchModal(b, onRemote) {
+function deleteBranchModal(b, onRemote, switchTo) {
   let force = false;
   let alsoRemote = false;
-  const message = h('p', { style: 'margin:0' }, `Delete the branch “${b.name}”?`);
+  const message = h('p', { style: 'margin:0' }, `Delete the branch “${b.name}”?${switchTo ? ` You are switched to ${switchTo} first.` : ''}`);
   const error = h('div', { class: 'form-error' });
   const remoteBox =
     onRemote &&
@@ -2127,6 +2280,7 @@ function deleteBranchModal(b, onRemote) {
     btn.disabled = true;
     error.textContent = '';
     try {
+      if (switchTo && S.status?.branch.head === b.name) await git.checkoutBranch(ex, S.repo.path, switchTo);
       await git.deleteBranch(ex, S.repo.path, b.name, { force });
       if (alsoRemote) await git.deleteRemoteBranch(ex, S.repo.path, b.upstream);
       closeFn();
@@ -2500,7 +2654,7 @@ function addRepos(server, paths) {
     last = { id: uid(), serverId: server.id, path, name: path.split('/').filter(Boolean).pop() || path };
     store.repos.push(last);
   }
-  store.repos.sort((a, b) => a.name.localeCompare(b.name));
+  store.repos.sort((a, b) => repoLabel(a).localeCompare(repoLabel(b)));
   save();
   if (last) selectRepo(last.id);
 }
@@ -2798,49 +2952,74 @@ async function checkForUpdates({ quiet = false } = {}) {
   }
   try {
     const update = await tauri.updater.check();
-    if (update) showUpdatePopup(update);
+    if (update) prepareUpdate(update, { quiet });
     else if (!quiet) toast(`RemoteGit ${appVersion} is the latest version.`);
   } catch (e) {
     if (!quiet) toast(String(e), 'error', 'Could not check for updates');
   }
 }
 
-function showUpdatePopup(update) {
-  if ($('#update-popup')) return;
-  const install = h('button', { class: 'btn btn-primary btn-sm', type: 'button' }, 'Install and restart');
-  const el = h(
-    'div',
-    { class: 'toast update', id: 'update-popup' },
-    h(
-      'div',
-      { class: 'msg' },
-      h('b', {}, `RemoteGit ${update.version} is available`),
-      appVersion ? `You have ${appVersion}.` : '',
-      update.body && h('div', { class: 'update-notes' }, update.body),
-      h('div', { class: 'update-actions' }, h('button', { class: 'btn btn-sm', type: 'button', onclick: () => el.remove() }, 'Later'), install),
-    ),
-  );
-  install.addEventListener('click', async () => {
-    install.disabled = true;
+// Like GitHub Desktop: the update downloads in the background and a slim bar
+// under the content offers "what's new" and a restart. On macOS it is installed
+// right away (the running app is unaffected); Windows installs on restart.
+let pendingUpdate = null;
+
+async function prepareUpdate(update, { quiet }) {
+  if (pendingUpdate?.version === update.version) return showUpdateBar(update, pendingUpdate.state);
+  pendingUpdate = { version: update.version, state: 'downloading' };
+  if (!quiet) showUpdateBar(update, 'downloading');
+  try {
     let total = 0;
     let done = 0;
+    await update.download((ev) => {
+      if (ev.event === 'Started') total = ev.data.contentLength || 0;
+      else if (ev.event === 'Progress' && !quiet) {
+        done += ev.data.chunkLength;
+        if (total) showUpdateBar(update, 'downloading', Math.round((done / total) * 100));
+      }
+    });
+    if (isMac) await update.install();
+    pendingUpdate.state = 'ready';
+    showUpdateBar(update, 'ready');
+  } catch (e) {
+    pendingUpdate = null;
+    $('#update-bar').hidden = true;
+    if (!quiet) toast(String(e), 'error', 'The update failed');
+  }
+}
+
+function showUpdateBar(update, state, percent) {
+  const bar = $('#update-bar');
+  const link = (text, onclick) => h('button', { class: 'link', type: 'button', onclick }, text);
+  const notes = link('what’s new', () => openExternal(`https://github.com/adammery/remotegit/releases/tag/v${update.version}`));
+  const restart = link('restart RemoteGit', async () => {
     try {
-      await update.downloadAndInstall((ev) => {
-        if (ev.event === 'Started') total = ev.data.contentLength || 0;
-        else if (ev.event === 'Progress') {
-          done += ev.data.chunkLength;
-          install.textContent = total ? `Downloading ${Math.round((done / total) * 100)}%` : 'Downloading…';
-        } else if (ev.event === 'Finished') install.textContent = 'Installing…';
-      });
+      if (!isMac) await update.install(); // runs the installer, which closes the app
       await tauri.process.relaunch();
     } catch (e) {
-      install.disabled = false;
-      install.textContent = 'Install and restart';
       toast(String(e), 'error', 'The update failed');
     }
   });
-  $('#toast-root').append(el);
+  bar.hidden = false;
+  bar.replaceChildren(
+    h('span', { html: icons.upload }),
+    h(
+      'span',
+      { class: 'grow' },
+      state === 'downloading'
+        ? `Downloading RemoteGit ${update.version}${percent != null ? ` (${percent}%)` : ''}…`
+        : [
+            isMac ? `RemoteGit ${update.version} is ready and will be used at the next launch. See ` : `RemoteGit ${update.version} is ready. See `,
+            notes,
+            ' or ',
+            restart,
+            isMac ? '.' : ' to install it.',
+          ],
+    ),
+    h('button', { class: 'btn-icon', type: 'button', title: 'Hide', html: icons.x, onclick: () => (bar.hidden = true) }),
+  );
 }
+
 
 // ============================================================ toasts
 
@@ -2896,6 +3075,12 @@ function init() {
   }
 
   $('#tb-repo').addEventListener('click', repoPopover);
+  $('#tb-repo').addEventListener('contextmenu', (e) => S.repo && repoMenu(e, S.repo));
+  $('#tb-branch').addEventListener('contextmenu', (e) => {
+    const st = S.status;
+    if (!st?.branch.head) return;
+    branchMenu(e, { name: st.branch.head, upstream: st.branch.upstream }, !!st.branch.upstream);
+  });
   $('#tb-server').addEventListener('click', serverPopover);
   $('#tb-settings').addEventListener('click', settingsPopover);
   // The menu bar window owns no settings of its own; the theme is stored here.

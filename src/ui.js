@@ -63,6 +63,9 @@ export function setMenuBarOnly(enabled) {
   tauri?.core.invoke('set_menu_bar_only', { enabled }).catch(() => {});
 }
 
+/** A repository's name in lists: its alias when it has one. */
+export const repoLabel = (r) => r?.alias || r?.name || '';
+
 /** What the Rust side needs to open a connection to `server`. */
 export const targetOf = (s) => ({
   host: s.host,

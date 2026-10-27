@@ -4,7 +4,7 @@
 
 import * as git from './git.js';
 import { icons, fileIcon } from './icons.js';
-import { h, ago, targetOf, undoable as undoableCommit, openMenu, readKey as read, setShowInMenuBar, setMenuBarOnly, STORE_KEY as MAIN_KEY, TRAY_KEY } from './ui.js';
+import { h, ago, targetOf, undoable as undoableCommit, openMenu, repoLabel, readKey as read, setShowInMenuBar, setMenuBarOnly, STORE_KEY as MAIN_KEY, TRAY_KEY } from './ui.js';
 
 const tauri = window.__TAURI__;
 // The window itself is transparent on macOS; the content draws the rounded panel.
@@ -111,7 +111,7 @@ function updateTrayStatus() {
   const n = T.status?.files.length || 0;
   const ahead = T.status?.branch.ahead || 0;
   const title = [n ? String(n) : '', ahead ? `↑${ahead}` : ''].filter(Boolean).join(' ');
-  const tooltip = T.repo ? `RemoteGit — ${T.repo.name}: ${n} changed file${n === 1 ? '' : 's'}` : 'RemoteGit';
+  const tooltip = T.repo ? `RemoteGit — ${repoLabel(T.repo)}: ${n} changed file${n === 1 ? '' : 's'}` : 'RemoteGit';
   tauri.core.invoke('set_tray_status', { title, tooltip }).catch(() => {});
 }
 
@@ -209,7 +209,7 @@ function render() {
       h(
         'span',
         { class: 'grow' },
-        h('span', { class: 'name' }, T.repo?.name || 'No repository'),
+        h('span', { class: 'name' }, repoLabel(T.repo) || 'No repository'),
         h('span', { class: 'where' }, T.server && dot(T.server.id), T.server ? T.server.name || T.server.host : 'Add one in the main window'),
       ),
       h('span', { html: icons.caret }),
@@ -232,7 +232,7 @@ function render() {
                 'div',
                 { class: 'pop-item' + (r.id === T.repo?.id ? ' current' : ''), onclick: () => selectRepo(r.id) },
                 h('span', { html: r.id === T.repo?.id ? icons.check : icons.repo }),
-                h('div', { class: 'grow' }, h('div', { class: 'title' }, r.name), h('div', { class: 'sub' }, r.path)),
+                h('div', { class: 'grow' }, h('div', { class: 'title' }, repoLabel(r)), h('div', { class: 'sub' }, r.path)),
               ),
             ),
         ]),

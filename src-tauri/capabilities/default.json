@@ -26,6 +26,14 @@
     "core:window:allow-show",
     "core:window:allow-set-focus",
     "updater:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        {
+          "path": "**"
+        }
+      ]
+    }
   ]
 }

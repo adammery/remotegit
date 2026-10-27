@@ -226,7 +226,14 @@ svg { display: block; flex: none; }
   min-height: 0;
 }
 .resizer { width: 5px; margin-left: -3px; cursor: col-resize; z-index: 2; flex: none; }
-.content { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); overflow: hidden; }
+.content-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.content { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); overflow: hidden; }
+.update-bar { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 6px 0 12px; border-top: 1px solid var(--border); background: var(--panel); font-size: 12px; flex: none; }
+.update-bar[hidden] { display: none; }
+.update-bar .grow { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.update-bar > span:first-child { color: var(--accent); display: inline-flex; }
+.update-bar .link { border: 0; padding: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; }
+.update-bar .btn-icon { width: 22px; height: 22px; }
 
 .tabs { display: flex; flex: none; border-bottom: 1px solid var(--border); }
 .tab {
@@ -717,9 +724,6 @@ kbd { font: 12px var(--mono); padding: 1px 6px; border: 1px solid var(--border);
 .dl .code .hljs-strong { font-weight: 600; }
 
 .settings-version { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
-.toast.update { border-left-color: var(--st-new); }
-.update-notes { margin-top: 6px; color: var(--muted); max-height: 120px; overflow: auto; white-space: pre-wrap; }
-.update-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
 
 .stash-row { display: flex; align-items: center; gap: 8px; padding: 0 10px; height: 31px; border-top: 1px solid var(--border); cursor: pointer; flex: none; }
 .stash-row:hover { background: var(--hover); }

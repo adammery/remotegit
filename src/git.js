@@ -850,6 +850,40 @@ printf '%s\\n' ${q('/' + path)} >> .gitignore`,
     ),
   );
 
+// ------------------------------------------------------------ worktrees
+
+/** Every worktree of the repository: { path, branch, sha, detached, bare, current }. */
+export async function listWorktrees(exec, repo) {
+  const out = await run(exec, inRepo(repo, `${GIT} worktree list --porcelain || exit $?\n${PRINT_SEP}\npwd -P`));
+  const [list, here = ''] = out.split(SEP);
+  const trees = [];
+  for (const block of list.split('\n\n')) {
+    const t = {};
+    for (const line of block.split('\n')) {
+      const [key, ...rest] = line.split(' ');
+      const val = rest.join(' ');
+      if (key === 'worktree') t.path = val;
+      else if (key === 'HEAD') t.sha = val;
+      else if (key === 'branch') t.branch = val.replace(/^refs\/heads\//, '');
+      else if (key === 'detached' || key === 'bare' || key === 'locked' || key === 'prunable') t[key] = true;
+    }
+    if (t.path) trees.push({ ...t, current: t.path === here.trim() });
+  }
+  return trees;
+}
+
+/** A new worktree at `path` on `branch`, created from HEAD when it doesn't exist yet. */
+export const addWorktree = (exec, repo, path, branch) =>
+  run(
+    exec,
+    inRepo(
+      repo,
+      `if ${GIT} show-ref --verify --quiet ${q('refs/heads/' + branch)}; then ${GIT} worktree add -q ${qpath(path)} ${q(branch)}
+else ${GIT} worktree add -q -b ${q(branch)} ${qpath(path)}; fi`,
+    ),
+    120,
+  );
+
 // ------------------------------------------------------------ conflicts
 
 const MARKERS = /^(<<<<<<<|>>>>>>>)( |$)/m;

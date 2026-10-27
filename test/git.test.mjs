@@ -663,3 +663,17 @@ test('conflicts: use mine, abort, and AI resolution', async () => {
   rmSync(join(bin, 'claude'));
   assert.equal(await git.resolveConflictWithAi(exec, dir, 'f.txt', { ours: 'main', theirs: 'other', tool: 'claude' }), false);
 });
+
+test('worktrees: list and add for a new and an existing branch', async () => {
+  const dir = newRepo();
+  sh(dir, 'git commit -q --allow-empty -m init && git branch existing');
+  let trees = await git.listWorktrees(exec, dir);
+  assert.deepEqual(trees.map((t) => [t.branch, t.current]), [['main', true]]);
+  await git.addWorktree(exec, dir, join(root, 'wt-new'), 'feature/new');
+  await git.addWorktree(exec, dir, join(root, 'wt old'), 'existing');
+  trees = await git.listWorktrees(exec, dir);
+  const byName = (a, b) => (a[0] < b[0] ? -1 : 1); // git lists them in its own order
+  assert.deepEqual(trees.map((t) => [t.path.split('/').pop(), t.branch, t.current]).sort(byName), [[dir.split('/').pop(), 'main', true], ['wt old', 'existing', false], ['wt-new', 'feature/new', false]].sort(byName));
+  assert.equal(sh(join(root, 'wt-new'), 'git branch --show-current').trim(), 'feature/new');
+  await assert.rejects(git.addWorktree(exec, dir, join(root, 'wt again'), 'existing'), /already (checked out|used by worktree)/);
+});

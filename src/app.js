@@ -2043,21 +2043,20 @@ function createRepoModal(preselected) {
   const gitignore = h('select', { disabled: true }, h('option', { value: '' }, 'Loading…'));
   const license = h('select', { disabled: true }, h('option', { value: '' }, 'Loading…'));
   const publish = h('select', {}, h('option', { value: '' }, 'No, only on the server'), h('option', { value: 'private' }, 'Yes, as a private repository'), h('option', { value: 'public' }, 'Yes, as a public repository'));
-  const owner = h('select', {});
-  const ownerField = field('Owner', owner);
-  ownerField.hidden = true;
+  // Always on screen, so the organizations are easy to find; used only for GitHub.
+  const owner = h('select', { disabled: true }, h('option', { value: '' }, 'Loading…'));
   const ghHint = h('small', { class: 'hint' });
-  publish.addEventListener('change', () => (ownerField.hidden = !publish.value || owner.options.length < 2));
+  publish.addEventListener('change', () => (owner.disabled = !publish.value || !owner.value));
   // Templates and owners come from GitHub through gh on that server.
   const loadOptions = async () => {
     const o = await git.getRepoOptions((script, t) => execOn(server, script, t)).catch(() => null);
     gitignore.replaceChildren(none(), ...(o?.gitignores || []).map((t) => h('option', { value: t }, t)));
     license.replaceChildren(none(), ...(o?.licenses || []).map((l) => h('option', { value: l.key }, l.name)));
-    owner.replaceChildren(...(o?.owners || []).map((n) => h('option', { value: n }, n)));
+    owner.replaceChildren(...(o?.owners.length ? o.owners.map((n, i) => h('option', { value: n }, i ? `${n} (organization)` : n)) : [h('option', { value: '' }, '—')]));
     gitignore.disabled = license.disabled = !o;
     publish.disabled = !o;
     if (!o) publish.value = '';
-    ownerField.hidden = !publish.value || owner.options.length < 2;
+    owner.disabled = !publish.value || !owner.value;
     ghHint.textContent = o ? '' : 'Git Ignore, License and GitHub need the GitHub CLI on the server (gh auth login).';
   };
   const error = h('div', { class: 'form-error' });
@@ -2079,7 +2078,7 @@ function createRepoModal(preselected) {
       field('Git Ignore', gitignore),
       field('License', license),
       field('Also create it on GitHub', publish),
-      ownerField,
+      field('Owner', owner, 'Your account or one of your organizations.'),
       ghHint,
       error,
     ],

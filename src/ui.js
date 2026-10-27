@@ -85,3 +85,10 @@ export function openMenu(x, y, items) {
 }
 
 document.addEventListener('mousedown', (e) => menuEl && !menuEl.contains(e.target) && closeMenu());
+
+// No browser menu (Reload, Inspect…) in the app; it stays for text fields and
+// selected text so copy and paste work.
+document.addEventListener('contextmenu', (e) => {
+  if (e.defaultPrevented || e.target.closest?.('input, textarea') || String(getSelection()).trim()) return;
+  e.preventDefault();
+});

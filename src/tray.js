@@ -197,8 +197,8 @@ async function commitAll() {
 async function generate() {
   if (!T.status?.files.length || T.busy) return;
   await busy('Writing the message', async () => {
-    const m = await git.generateCommitMessage(ex, T.repo.path, T.status.files, !!T.status.branch.oid);
-    if (!m) throw new Error('Claude Code was not found on the server. Install it there and sign in once by running claude.');
+    const m = await git.generateCommitMessage(ex, T.repo.path, T.status.files, !!T.status.branch.oid, main.aiTool);
+    if (!m) throw new Error(`${git.aiToolName(main.aiTool)} was not found on the server. Install it there and sign in once.`);
     T.draft = m.summary;
     T.description = m.description;
   });
@@ -358,7 +358,7 @@ function statusParts() {
           'div',
           { class: 'input-row' },
           h('input', { id: 'tray-summary', placeholder: 'Summary (required)', oninput: updateCommitButton, onkeydown: (e) => e.key === 'Enter' && commitAll() }),
-          h('button', { class: 'btn', type: 'button', title: 'Write the message with Claude (on the server)', html: T.busy === 'Writing the message' ? icons.spinner : icons.sparkle, disabled: !!T.busy, onclick: generate }),
+          h('button', { class: 'btn', type: 'button', title: 'Write the message with AI (on the server)', html: T.busy === 'Writing the message' ? icons.spinner : icons.sparkle, disabled: !!T.busy, onclick: generate }),
         ),
         st.remote &&
           h(

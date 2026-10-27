@@ -15,6 +15,7 @@ const store = Object.assign(
     sidebarWidth: 300,
     theme: 'system',
     commitOpts: { noVerify: false, signoff: false, allowEmpty: false },
+    aiTool: 'auto',
   },
   readStore(),
 );
@@ -540,9 +541,10 @@ async function generateMessage() {
   btn.disabled = true;
   btn.innerHTML = icons.spinner;
   try {
-    const m = await git.generateCommitMessage(ex, S.repo.path, files, hasHead());
+    const m = await git.generateCommitMessage(ex, S.repo.path, files, hasHead(), store.aiTool);
     if (!m) {
-      toast('Install Claude Code on the server and sign in there once (run `claude`). RemoteGit uses it to write the message.', 'error', 'Claude Code not found on the server');
+      const name = git.aiToolName(store.aiTool);
+      toast(`Install ${name} on the server and sign in there once (run \`claude\` or \`codex\`). RemoteGit uses it to write the message.`, 'error', `${name} not found on the server`);
     } else {
       $('#summary').value = m.summary;
       $('#description').value = m.description;
@@ -1319,6 +1321,9 @@ function settingsPopover() {
             h('input', { type: 'checkbox', checked: !!trayPrefs().menuBarOnly, disabled: !trayPrefs().showInMenuBar, onchange: (e) => { setMenuBarOnly(e.target.checked); fill(); } }),
             h('span', {}, h('b', {}, isMac ? 'Hide from the Dock' : 'Hide from the taskbar'), h('br'), h('span', { class: 'hint' }, 'Closing the window keeps RemoteGit running in the menu bar.')),
           ),
+          h('div', { class: 'settings-label' }, 'AI commit messages'),
+          seg([['auto', 'Auto'], ['claude', 'Claude'], ['codex', 'Codex']], store.aiTool || 'auto', (v) => { store.aiTool = v; save(); fill(); }),
+          h('div', { class: 'settings-hint' }, store.aiTool === 'claude' || store.aiTool === 'codex' ? `Written by ${git.aiToolName(store.aiTool)} on the server.` : 'Written by Claude Code on the server, or by Codex when Claude Code isn’t installed.'),
           h('button', { class: 'btn btn-block', type: 'button', onclick: () => { closePopover(); shortcutsModal(); } }, 'Keyboard shortcuts'),
           h(
             'div',
@@ -1745,9 +1750,10 @@ function serverModal(existing) {
         temp,
         `echo "user $(id -un)@$(hostname)"
 git --version 2>/dev/null || echo "git missing"
-PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.claude/local:/usr/local/bin:$PATH"
+${git.AI_PATH}
 if command -v gh >/dev/null 2>&1; then gh auth status >/dev/null 2>&1 && echo "gh ok" || echo "gh signed-out"; else echo "gh missing"; fi
-command -v claude >/dev/null 2>&1 && echo "claude ok" || echo "claude missing"`,
+command -v claude >/dev/null 2>&1 && echo "claude ok" || echo "claude missing"
+command -v codex >/dev/null 2>&1 && echo "codex ok" || echo "codex missing"`,
         30,
       );
       const out = r.stdout;
@@ -1758,7 +1764,8 @@ command -v claude >/dev/null 2>&1 && echo "claude ok" || echo "claude missing"`,
         line(true, draft.local ? `Running as ${who || 'you'} on this computer` : `Connected as ${who || draft.host}`),
         line(!!gitVer, gitVer ? `Git ${gitVer}` : 'Git is not installed on the server'),
         line(/^gh ok$/m.test(out), /^gh ok$/m.test(out) ? 'GitHub CLI signed in — pull requests available' : /^gh signed-out$/m.test(out) ? `GitHub CLI found but not signed in (run gh auth login ${draft.local ? 'in a terminal' : 'on the server'})` : 'GitHub CLI not installed — no pull request list'),
-        line(/^claude ok$/m.test(out), /^claude ok$/m.test(out) ? 'Claude Code found — AI commit messages available' : 'Claude Code not installed — no AI commit messages'),
+        line(/^claude ok$/m.test(out), /^claude ok$/m.test(out) ? 'Claude Code found — AI commit messages available' : 'Claude Code not installed'),
+        line(/^codex ok$/m.test(out), /^codex ok$/m.test(out) ? 'Codex found — AI commit messages available' : 'Codex not installed'),
       );
     } catch (e) {
       error.textContent = e.message;

@@ -700,6 +700,7 @@ kbd { font: 12px var(--mono); padding: 1px 6px; border: 1px solid var(--border);
 
 .settings-check { font-size: 12px; padding: 4px 0; }
 .settings-check.off { opacity: 0.5; }
+.settings-hint { color: var(--muted); font-size: 12px; margin-top: -2px; }
 .field-stack { display: flex; flex-direction: column; gap: 12px; }
 
 /* ------------------------------------------------------------ syntax highlighting (GitHub's colors) */

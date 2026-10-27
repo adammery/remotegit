@@ -555,11 +555,17 @@ export function parseCoAuthors(text) {
     });
 }
 
+/** Where Claude Code and Codex usually live when the login shell doesn't say. */
+export const AI_PATH = 'PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.claude/local:/usr/local/bin:$PATH"';
+
+export const aiToolName = (tool) => ({ claude: 'Claude Code', codex: 'Codex' })[tool] || 'Claude Code or Codex';
+
 /**
- * Asks Claude Code on the server for a commit message for `files`, in the
- * style of the recent history. Returns null when `claude` isn't installed.
+ * Asks Claude Code or Codex on the server for a commit message for `files`, in
+ * the style of the recent history. `tool` is 'auto' (Claude first), 'claude' or
+ * 'codex'. Returns null when that tool isn't installed.
  */
-export async function generateCommitMessage(exec, repo, files, hasHead) {
+export async function generateCommitMessage(exec, repo, files, hasHead, tool = 'auto') {
   const tracked = files.filter((f) => hasHead && f.xy !== '??');
   const untracked = files.filter((f) => !hasHead || f.xy === '??').slice(0, 30);
   const diffs = [
@@ -568,19 +574,38 @@ export async function generateCommitMessage(exec, repo, files, hasHead) {
     ...untracked.map((f) => `${GIT} diff --no-index --no-color --no-ext-diff -- /dev/null ${q(f.path)}`),
   ].filter(Boolean);
   const intro =
-    'Write a git commit message for the diff on stdin. Match the style (language, casing, prefixes) of these recent commit subjects:';
+    'Write a git commit message for the diff on stdin. Use only that diff, do not run commands. Match the style (language, casing, prefixes) of these recent commit subjects:';
   const outro =
     'Reply with only the message: a summary line under 72 characters, then optionally a blank line and a short body. No quotes, no code fences.';
   const r = await exec(
     inRepo(
       repo,
-      `PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.claude/local:/usr/local/bin:$PATH"
-command -v claude >/dev/null 2>&1 || exit 127
+      `${AI_PATH}
+want=${q(tool)}
+ai=
+for t in claude codex; do
+  [ "$want" = auto ] || [ "$want" = "$t" ] || continue
+  command -v "$t" >/dev/null 2>&1 && { ai=$t; break; }
+done
+[ -n "$ai" ] || exit 127
 recent=$(${GIT} log -n 15 --format=%s 2>/dev/null)
 prompt=$(printf '%s\n%s\n\n%s' ${q(intro)} "$recent" ${q(outro)})
-{ ${diffs.map((d) => `${d};`).join(' ') || 'true;'} } | head -c 120000 | claude -p "$prompt"`,
+changes() { { ${diffs.map((d) => `${d};`).join(' ') || 'true;'} } | head -c 120000; }
+if [ "$ai" = claude ]; then
+  changes | claude -p "$prompt"
+  exit
+fi
+# Codex is an agent: keep it read-only and take only its final answer.
+out=$(mktemp) || exit 1
+eph=
+codex exec --help 2>/dev/null | grep -q -- --ephemeral && eph=--ephemeral
+changes | codex exec --sandbox read-only --skip-git-repo-check $eph --color never -o "$out" "$prompt" >/dev/null 2>"$out.log"
+rc=$?
+if [ $rc -eq 0 ]; then cat "$out"; else tail -n 20 "$out.log" >&2; fi
+rm -f "$out" "$out.log"
+exit $rc`,
     ),
-    180,
+    240,
   );
   if (r.code === 127) return null;
   const text = must(r)

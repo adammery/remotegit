@@ -18,7 +18,7 @@ RemoteGit checks for new versions on its own and shows a popup with **Install an
 
 - Uses the SSH client already on your system (`ssh` on macOS, OpenSSH on Windows 10/11), so your keys, ssh-agent and `~/.ssh/config` just work.
 - Keeps **one persistent SSH connection** per server and sends every git command through it, so a refresh is one quick command, not a new login.
-- Nothing to install on the server besides `git` and `sh`. Optional extras on the server: the GitHub CLI (`gh`) for pull requests, and Claude Code (`claude`) for AI commit messages.
+- Nothing to install on the server besides `git` and `sh`. Optional extras on the server: the GitHub CLI (`gh`) for pull requests, and Claude Code (`claude`) or Codex (`codex`) for AI commit messages.
 - While the window has focus, status refreshes every 4 seconds, and right away when you switch back to it. Changes made elsewhere on the server (VS Code, vim, an AI agent, …) show up on their own. When you're in another app, RemoteGit sends nothing to the server. One refresh is about 1.5 KB and a few milliseconds of `git status` on the server.
 - Built with Tauri, so the installer is a few MB and memory use is low.
 
@@ -28,7 +28,7 @@ RemoteGit checks for new versions on its own and shows a popup with **Install an
 - Changed files with checkboxes and a diff with line numbers and **syntax highlighting** (GitHub's colors, about 35 languages).
 - **Commit only some lines**: click the gutter (or drag over it) to choose lines, or click a `@@` header for the whole block.
 - Summary, description, **co-authors** (`@login` or `Name <email>`), and options to bypass hooks, add a Signed-off-by trailer or allow an empty commit.
-- **AI commit message**: the ✨ button asks Claude Code on the server to describe the selected changes in the style of your recent commits. No API key in the app.
+- **AI commit message**: the ✨ button asks Claude Code or Codex on the server to describe the selected changes in the style of your recent commits. Pick one in ⚙ or leave it on Auto (Claude Code first). Codex runs read-only. No API key in the app.
 - **Undo** the last commit. Right-click a file to discard it, add it to `.gitignore`, or copy its path.
 
 ![Commit only some lines](docs/lines.png)
@@ -50,7 +50,7 @@ RemoteGit checks for new versions on its own and shows a popup with **Install an
 **Servers and repositories**
 - Several servers; the **Server** menu filters the repository list to one server or shows all.
 - **This computer**: use repositories on your own Mac or PC as well, like GitHub Desktop (needs git; on Windows, Git for Windows).
-- **Test connection** checks SSH, git, the GitHub CLI and Claude Code on the server.
+- **Test connection** checks SSH, git, the GitHub CLI, Claude Code and Codex on the server.
 - Add repositories by scanning the server (`~`, `/var/www`, `/srv`), by path, or with a **folder browser** that walks the server's folders.
 - Pick your SSH key with a file dialog. "Open in VS Code" opens the repo through Remote-SSH; "Copy SSH command" gives you a terminal in the repo folder.
 

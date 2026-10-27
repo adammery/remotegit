@@ -281,6 +281,53 @@ test('generateCommitMessage pipes the diff to claude on the server', async () =>
   rmSync(join(bin, 'claude'));
 });
 
+test('generateCommitMessage falls back to a read-only codex exec', async () => {
+  const dir = newRepo();
+  writeFileSync(join(dir, 'a.txt'), 'old\n');
+  sh(dir, 'git add -A && git commit -qm "Add a"');
+  writeFileSync(join(dir, 'a.txt'), 'new\n');
+  const st = await git.getStatus(exec, dir);
+
+  const bin = join(root, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  // Fake codex: checks the flags, saves stdin and writes the answer to the -o file.
+  writeFileSync(
+    join(bin, 'codex'),
+    `#!/bin/sh
+[ "$1" = exec ] || exit 9
+shift
+[ "$1" = --help ] && { echo '      --ephemeral'; exit 0; }
+printf '%s ' "$@" > ${root}/codex-args
+out=
+while [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done
+cat > ${root}/codex-input
+echo 'thinking…' >&2
+echo 'progress on stdout'
+printf 'Change a.txt\\n\\nFrom codex.\\n' > "$out"
+`,
+    { mode: 0o755 },
+  );
+  assert.equal(await git.generateCommitMessage(exec, dir, st.files, true, 'claude'), null);
+  const msg = await git.generateCommitMessage(exec, dir, st.files, true);
+  assert.deepEqual(msg, { summary: 'Change a.txt', description: 'From codex.' });
+  assert.match(readFileSync(join(root, 'codex-input'), 'utf8'), /-old\n\+new/);
+  const args = readFileSync(join(root, 'codex-args'), 'utf8');
+  assert.match(args, /--sandbox read-only/);
+  assert.match(args, /--ephemeral/);
+  assert.match(args, /Add a/);
+
+  // Auto prefers Claude Code; 'codex' forces Codex.
+  writeFileSync(join(bin, 'claude'), '#!/bin/sh\ncat >/dev/null\necho From claude\n', { mode: 0o755 });
+  assert.equal((await git.generateCommitMessage(exec, dir, st.files, true)).summary, 'From claude');
+  assert.equal((await git.generateCommitMessage(exec, dir, st.files, true, 'codex')).summary, 'Change a.txt');
+
+  // A failing codex reports its log instead of its progress output.
+  writeFileSync(join(bin, 'codex'), '#!/bin/sh\n[ "$2" = --help ] && exit 0\necho "Not logged in" >&2\nexit 1\n', { mode: 0o755 });
+  await assert.rejects(git.generateCommitMessage(exec, dir, st.files, true, 'codex'), /Not logged in/);
+  rmSync(join(bin, 'claude'));
+  rmSync(join(bin, 'codex'));
+});
+
 test('listDir browses folders and marks repositories', async () => {
   const dir = newRepo();
   mkdirSync(join(dir, 'plain dir'));

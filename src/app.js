@@ -1,11 +1,11 @@
 import * as git from './git.js';
 import { icons, fileIcon } from './icons.js';
+import { h, ago, targetOf, undoable as undoableCommit, openMenu, closeMenu, readKey, STORE_KEY, TRAY_KEY } from './ui.js';
 
 const tauri = window.__TAURI__;
 
 // ============================================================ persistence
 
-const STORE_KEY = 'remotegit:v1';
 const store = Object.assign(
   {
     servers: [],
@@ -16,16 +16,9 @@ const store = Object.assign(
     theme: 'system',
     commitOpts: { noVerify: false, signoff: false, allowEmpty: false },
   },
-  readStore(),
+  readKey(STORE_KEY),
 );
 
-function readStore() {
-  try {
-    return JSON.parse(localStorage.getItem(STORE_KEY)) || {};
-  } catch {
-    return {};
-  }
-}
 function save() {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify(store));
@@ -36,37 +29,8 @@ const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(
 
 // ============================================================ DOM helpers
 
-function h(tag, props, ...kids) {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(props || {})) {
-    if (v == null || v === false) continue;
-    if (k === 'class') el.className = v;
-    else if (k === 'html') el.innerHTML = v; // static icon markup only
-    else if (k === 'dataset') Object.assign(el.dataset, v);
-    else if (k === 'style') el.style.cssText = v;
-    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
-    else if (k in el && typeof v !== 'string') el[k] = v;
-    else el.setAttribute(k, v === true ? '' : v);
-  }
-  for (const kid of kids.flat(Infinity)) {
-    if (kid == null || kid === false) continue;
-    el.append(kid instanceof Node ? kid : String(kid));
-  }
-  return el;
-}
 const $ = (sel) => document.querySelector(sel);
 const ico = (name) => h('span', { class: 'ico', html: icons[name] });
-
-function ago(sec) {
-  if (!sec) return 'never';
-  const s = Math.max(0, Date.now() / 1000 - sec);
-  if (s < 45) return 'just now';
-  const units = [[60, 'minute'], [3600, 'hour'], [86400, 'day'], [604800, 'week'], [2629800, 'month'], [31557600, 'year']];
-  let [div, name] = units[0];
-  for (const u of units) if (s >= u[0]) [div, name] = u;
-  const n = Math.max(1, Math.round(s / div));
-  return `${n} ${name}${n > 1 ? 's' : ''} ago`;
-}
 
 // GitHub account `gh` is signed in to, per server; used for the user's own commits.
 const ghUsers = new Map();
@@ -136,15 +100,6 @@ function openExternal(url) {
 class ConnError extends Error {}
 const connections = new Map(); // serverId -> Promise of ssh_connect
 const connState = new Map(); // serverId -> 'connecting' | 'ok' | 'error'
-
-const targetOf = (s) => ({
-  host: s.host,
-  user: s.user || null,
-  port: s.port ? Number(s.port) : null,
-  identityFile: s.identityFile || null,
-  forwardAgent: !!s.forwardAgent,
-  local: !!s.local,
-});
 
 function connect(server) {
   connState.set(server.id, 'connecting');
@@ -589,13 +544,7 @@ async function loadHeadCommit() {
   renderUndo();
 }
 
-/** Like GitHub Desktop: the newest commit can be undone until it is pushed. */
-function undoable() {
-  const st = S.status;
-  const c = S.headCommit;
-  if (!st || !c || c.sha !== st.branch.oid || !st.branch.head) return null;
-  return !st.branch.upstream || st.branch.ahead > 0 ? c : null;
-}
+const undoable = () => undoableCommit(S.status, S.headCommit);
 
 async function undoLastCommit() {
   const c = undoable();
@@ -1206,7 +1155,6 @@ function openPopover(anchor, build, width) {
 
 document.addEventListener('mousedown', (e) => {
   if (popover && !popover.el.contains(e.target) && !popover.anchor.contains(e.target)) closePopover();
-  if (menuEl && !menuEl.contains(e.target)) closeMenu();
 });
 
 function repoPopover() {
@@ -1293,14 +1241,7 @@ function applyTheme() {
 }
 
 // Shared with the tray window, which has the same switch.
-const TRAY_KEY = 'remotegit:tray';
-function trayPrefs() {
-  try {
-    return JSON.parse(localStorage.getItem(TRAY_KEY)) || {};
-  } catch {
-    return {};
-  }
-}
+const trayPrefs = () => readKey(TRAY_KEY);
 function writeTrayPrefs(patch) {
   try {
     localStorage.setItem(TRAY_KEY, JSON.stringify({ ...trayPrefs(), ...patch }));
@@ -1611,28 +1552,6 @@ function switchBranch(name, remote) {
     else await git.checkoutBranch(ex, S.repo.path, name);
     S.lastCommit = null;
   });
-}
-
-let menuEl = null;
-function closeMenu() {
-  menuEl?.remove();
-  menuEl = null;
-}
-function openMenu(x, y, items) {
-  closeMenu();
-  menuEl = h(
-    'div',
-    { class: 'menu' },
-    items.filter(Boolean).map((it) =>
-      it === '-'
-        ? h('div', { class: 'menu-sep' })
-        : h('div', { class: 'menu-item' + (it.danger ? ' danger' : '') + (it.disabled ? ' disabled' : ''), onclick: it.disabled ? null : () => { closeMenu(); it.run(); } }, it.label),
-    ),
-  );
-  document.body.append(menuEl);
-  const r = menuEl.getBoundingClientRect();
-  menuEl.style.left = `${Math.min(x, innerWidth - r.width - 8)}px`;
-  menuEl.style.top = `${Math.min(y, innerHeight - r.height - 8)}px`;
 }
 
 // ============================================================ modals

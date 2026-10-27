@@ -4,19 +4,11 @@
 
 import * as git from './git.js';
 import { icons, fileIcon } from './icons.js';
+import { h, ago, targetOf, undoable as undoableCommit, openMenu, readKey as read, STORE_KEY as MAIN_KEY, TRAY_KEY } from './ui.js';
 
 const tauri = window.__TAURI__;
-const MAIN_KEY = 'remotegit:v1';
-const TRAY_KEY = 'remotegit:tray';
 const FILES_SHOWN = 8;
 
-const read = (key) => {
-  try {
-    return JSON.parse(localStorage.getItem(key)) || {};
-  } catch {
-    return {};
-  }
-};
 // The main window changes these too, so always start from what's stored.
 const writePrefs = (patch) => {
   prefs = { ...read(TRAY_KEY), ...patch };
@@ -27,35 +19,6 @@ const writePrefs = (patch) => {
 
 let main = read(MAIN_KEY); // servers, repos, theme, commit options — owned by the main window
 let prefs = read(TRAY_KEY); // repoId, pushAfterCommit, menuBarOnly
-
-function h(tag, props, ...kids) {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(props || {})) {
-    if (v == null || v === false) continue;
-    if (k === 'class') el.className = v;
-    else if (k === 'html') el.innerHTML = v; // static icon markup only
-    else if (k === 'style') el.style.cssText = v;
-    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
-    else if (k in el && typeof v !== 'string') el[k] = v;
-    else el.setAttribute(k, v === true ? '' : v);
-  }
-  for (const kid of kids.flat(Infinity)) {
-    if (kid == null || kid === false) continue;
-    el.append(kid instanceof Node ? kid : String(kid));
-  }
-  return el;
-}
-
-function ago(sec) {
-  if (!sec) return 'never';
-  const s = Math.max(0, Date.now() / 1000 - sec);
-  if (s < 45) return 'just now';
-  const units = [[60, 'minute'], [3600, 'hour'], [86400, 'day'], [604800, 'week'], [2629800, 'month'], [31557600, 'year']];
-  let [div, name] = units[0];
-  for (const u of units) if (s >= u[0]) [div, name] = u;
-  const n = Math.max(1, Math.round(s / div));
-  return `${n} ${name}${n > 1 ? 's' : ''} ago`;
-}
 
 // ---------------------------------------------------------------- SSH
 
@@ -68,15 +31,6 @@ function setConn(serverId, state) {
   connState.set(serverId, state);
   render();
 }
-const targetOf = (s) => ({
-  host: s.host,
-  user: s.user || null,
-  port: s.port ? Number(s.port) : null,
-  identityFile: s.identityFile || null,
-  forwardAgent: !!s.forwardAgent,
-  local: !!s.local,
-});
-
 function connect(server) {
   if (!connections.has(server.id)) {
     if (connState.get(server.id) !== 'ok') setConn(server.id, 'connecting');
@@ -205,7 +159,7 @@ async function generate() {
   const btn = document.getElementById('tray-ai');
   if (tools.length > 1 && btn) {
     const r = btn.getBoundingClientRect();
-    openMenu(r.right, r.bottom + 4, [{ label: 'Write the message with', disabled: true }, ...tools.map((t) => ({ label: t.name, run: () => busy('Writing the message', () => write(t.id)) }))]);
+    openMenu(r.left, r.bottom + 4, [{ label: 'Write the message with', disabled: true }, ...tools.map((t) => ({ label: t.name, run: () => busy('Writing the message', () => write(t.id)) }))]);
   }
 }
 
@@ -216,30 +170,7 @@ async function write(tool) {
   T.description = m.description;
 }
 
-let menuEl = null;
-function closeMenu() {
-  menuEl?.remove();
-  menuEl = null;
-}
-function openMenu(right, top, items) {
-  closeMenu();
-  menuEl = h(
-    'div',
-    { class: 'menu' },
-    items.map((it) => h('div', { class: 'menu-item' + (it.disabled ? ' disabled' : ''), onclick: it.disabled ? null : () => { closeMenu(); it.run(); } }, it.label)),
-  );
-  document.body.append(menuEl);
-  menuEl.style.left = `${Math.max(8, right - menuEl.getBoundingClientRect().width)}px`;
-  menuEl.style.top = `${top}px`;
-}
-document.addEventListener('mousedown', (e) => menuEl && !menuEl.contains(e.target) && closeMenu());
-
-function undoable() {
-  const st = T.status;
-  const c = T.head;
-  if (!st || !c || c.sha !== st.branch.oid || !st.branch.head) return null;
-  return !st.branch.upstream || st.branch.ahead > 0 ? c : null;
-}
+const undoable = () => undoableCommit(T.status, T.head);
 
 // ---------------------------------------------------------------- render
 

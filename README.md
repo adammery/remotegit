@@ -161,6 +161,7 @@ Layout:
 | `src/git.js` | git commands (safely escaped) and parsers for their output |
 | `src/app.js` | main window UI (plain JavaScript, no framework, no build step) |
 | `src/tray.js` | the small menu bar window |
+| `src/ui.js` | helpers both windows share (DOM, menus, stored settings) |
 | `src/styles.css` | styling, light and dark mode |
 | `src/vendor/` | highlight.js for syntax highlighting |
 

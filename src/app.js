@@ -2851,13 +2851,20 @@ command -v codex >/dev/null 2>&1 && echo "codex ok" || echo "codex missing"`,
           : '',
       );
     } catch (e) {
-      error.textContent = e.message;
+      showConnectError(e, draft);
     } finally {
       forgetConnection(temp.id);
       testBtn.disabled = false;
       testBtn.textContent = 'Test connection';
     }
   });
+
+  // On this computer a failure is nearly always missing git: offer the setup window.
+  const showConnectError = (e, draft) =>
+    error.replaceChildren(
+      e.message,
+      draft.local ? h('div', {}, h('button', { class: 'btn btn-sm', type: 'button', style: 'margin-top:8px', onclick: () => setupModal({ ...draft, id: 'setup-' + uid() }) }, 'Set up this computer…')) : '',
+    );
 
   saveBtn.addEventListener('click', async () => {
     const draft = readDraft();
@@ -2868,9 +2875,11 @@ command -v codex >/dev/null 2>&1 && echo "codex ok" || echo "codex missing"`,
     try {
       await connect(draft);
     } catch (e) {
-      error.textContent = e.message;
       saveBtn.disabled = false;
       saveBtn.textContent = existing ? 'Save' : 'Connect';
+      // This computer without git: straight to the setup window, then connect.
+      if (draft.local) return setupModal({ ...draft, id: 'setup-' + uid() }, () => saveBtn.click());
+      showConnectError(e, draft);
       return;
     }
     const i = store.servers.findIndex((x) => x.id === draft.id);

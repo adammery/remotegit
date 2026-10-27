@@ -728,4 +728,34 @@ test('createRepo makes main with a README commit and refuses an existing repo', 
   const empty = join(root, 'empty-repo');
   await git.createRepo(exec, empty, { readme: false });
   assert.equal((await git.getStatus(exec, empty)).branch.oid, null);
+
+  // Templates and GitHub through a fake gh.
+  const bin = join(root, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(
+    join(bin, 'gh'),
+    `#!/bin/sh
+echo "$*" >> ${root}/gh-repo-log
+case "$1 $2" in
+  "api gitignore/templates") printf 'Node\\nPython\\n' ;;
+  "api licenses") printf 'mit\\tMIT License\\n' ;;
+  "api user") echo adammery ;;
+  "api user/orgs") echo vocalio ;;
+  "api gitignore/templates/Node") echo 'node_modules/' ;;
+  "api licenses/mit") echo 'Copyright (c) [year] [fullname]' ;;
+  "repo create") exit 0 ;;
+esac
+`,
+    { mode: 0o755 },
+  );
+  assert.deepEqual(await git.getRepoOptions(exec), { gitignores: ['Node', 'Python'], licenses: [{ key: 'mit', name: 'MIT License' }], owners: ['adammery', 'vocalio'] });
+  const full = join(root, 'full-repo');
+  await git.createRepo(exec, full, { description: 'A test app', gitignore: 'Node', license: 'mit', github: 'private', owner: 'vocalio' });
+  assert.equal(readFileSync(join(full, 'README.md'), 'utf8'), '# full-repo\n\nA test app\n');
+  assert.equal(readFileSync(join(full, '.gitignore'), 'utf8'), 'node_modules/\n');
+  assert.equal(readFileSync(join(full, 'LICENSE'), 'utf8'), `Copyright (c) ${new Date().getFullYear()} Test User\n`);
+  assert.equal(sh(full, 'git show --name-only --format= HEAD').trim().split('\n').sort().join(','), '.gitignore,LICENSE,README.md');
+  assert.match(readFileSync(join(root, 'gh-repo-log'), 'utf8'), /repo create vocalio\/full-repo --private --description A test app --source \. --remote origin --push/);
+  rmSync(join(bin, 'gh'));
+  assert.equal(await git.getRepoOptions(exec), null);
 });

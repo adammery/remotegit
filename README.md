@@ -60,7 +60,7 @@ RemoteGit checks for new versions on its own and shows a popup with **Install an
 - Several servers; the **Server** menu filters the repository list to one server or shows all.
 - The repository list shows which repositories have **uncommitted changes** (•) and commits to **push** (↑) or **pull** (↓), with the **Recent** ones on top.
 - Right-click a repository: **alias**, **worktrees** (show them, or add one for another branch), copy name or path, View on GitHub, terminal, Finder, VS Code, remove.
-- **New** creates a repository on the server (with a README, and optionally on GitHub too); **Clone** clones one.
+- **New** creates a repository on the server like GitHub Desktop does: description, README, a Git Ignore template and a license, and optionally on GitHub too, under your account or one of your organizations. **Clone** clones one.
 - **This computer**: use repositories on your own Mac or PC as well, like GitHub Desktop (needs git; on Windows, Git for Windows).
 - **Test connection** checks SSH, git, the GitHub CLI, Claude Code and Codex on the server.
 - Add repositories by scanning the server (`~`, `/var/www`, `/srv`), by path, or with a **folder browser** that walks the server's folders.

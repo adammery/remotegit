@@ -795,26 +795,68 @@ else ${GIT} clone -q ${q(`https://github.com/${src}.git`)} ${qpath(path)}; fi`
 
 /**
  * A new repository at `path` (created if needed), on branch main, optionally
- * with a README as its first commit and published to GitHub through `gh`.
+ * What the new-repository form can offer via `gh` on the server: .gitignore
+ * templates, licenses and the accounts to create it under. null without `gh`.
  */
-export async function createRepo(exec, path, { readme = true, github = null } = {}) {
+export async function getRepoOptions(exec) {
+  const r = await exec(
+    `${ghPath}
+${GH} api gitignore/templates --jq '.[]' || exit 3
+${PRINT_SEP}
+${GH} api licenses --jq '.[] | [.key, .name] | @tsv'
+${PRINT_SEP}
+${GH} api user --jq .login
+${GH} api user/orgs --jq '.[].login'
+true`,
+    60,
+  );
+  if (r.code !== 0) return null;
+  const [ignores, licenses = '', owners = ''] = r.stdout.split(SEP);
+  const lines = (t) => t.split('\n').map((l) => l.trim()).filter(Boolean);
+  return {
+    gitignores: lines(ignores),
+    licenses: lines(licenses).map((l) => {
+      const [key, name] = l.split('\t');
+      return { key, name };
+    }),
+    owners: lines(owners),
+  };
+}
+
+/**
+ * A new repository at `path` (created if needed) on branch main. The README
+ * (with the description), .gitignore template and license become its first
+ * commit; `github` ('private' | 'public') also creates it there under `owner`.
+ */
+export async function createRepo(exec, path, { readme = true, description = '', gitignore = '', license = '', github = null, owner = '' } = {}) {
   const name = path.replace(/\/+$/, '').split('/').pop();
+  const readmeText = `# ${name}\n${description.trim() ? `\n${description.trim()}\n` : ''}`;
+  const needsGh = gitignore || license;
   await run(
     exec,
     `[ -e ${qpath(path)}/.git ] && { echo ${q(`${path} is already a Git repository.`)} >&2; exit 1; }
+${needsGh ? ghPath : ''}
 mkdir -p ${qpath(path)} && cd ${qpath(path)} || exit 1
 ${GIT} init -q || exit $?
 ${GIT} symbolic-ref HEAD refs/heads/main
-${readme ? `[ -e README.md ] || printf '# %s\\n' ${q(name)} > README.md
-${GIT} add -A && ${GIT} commit -q -m 'Initial commit'` : 'true'}`,
-    60,
+${readme ? `[ -e README.md ] || printf '%s' ${q(readmeText)} > README.md` : ''}
+${gitignore ? `[ -e .gitignore ] || ${GH} api ${q(`gitignore/templates/${gitignore}`)} --jq .source > .gitignore || exit $?` : ''}
+${
+  license
+    ? `[ -e LICENSE ] || ${GH} api ${q(`licenses/${license}`)} --jq .body | sed "s/\\[year\\]/$(date +%Y)/; s/\\[fullname\\]/$(${GIT} config user.name | sed 's/[&/\\]/\\\\&/g')/" > LICENSE || exit $?`
+    : ''
+}
+if [ -n "$(${GIT} status --porcelain)" ]; then ${GIT} add -A && ${GIT} commit -q -m 'Initial commit'; fi`,
+    120,
   );
-  if (github)
+  if (github) {
+    const full = owner ? `${owner}/${name}` : name;
     await run(
       exec,
-      `${ghPath}\ncd ${qpath(path)} && ${GH} repo create ${q(name)} --${github === 'public' ? 'public' : 'private'} --source . --remote origin${readme ? ' --push' : ''}`,
+      `${ghPath}\ncd ${qpath(path)} && ${GH} repo create ${q(full)} --${github === 'public' ? 'public' : 'private'}${description.trim() ? ` --description ${q(description.trim())}` : ''} --source . --remote origin$(${GIT} rev-parse -q --verify HEAD >/dev/null && echo ' --push')`,
       NET_TIMEOUT,
     );
+  }
 }
 
 /**

@@ -2037,13 +2037,34 @@ function createRepoModal(preselected) {
   let parent = parentOf(server);
   const name = h('input', { placeholder: 'my-project', spellcheck: false });
   const where = h('input', { spellcheck: false, value: parent });
+  const description = h('input', { spellcheck: true });
   const readme = h('input', { type: 'checkbox', checked: true });
+  const none = () => h('option', { value: '' }, 'None');
+  const gitignore = h('select', { disabled: true }, h('option', { value: '' }, 'Loading…'));
+  const license = h('select', { disabled: true }, h('option', { value: '' }, 'Loading…'));
   const publish = h('select', {}, h('option', { value: '' }, 'No, only on the server'), h('option', { value: 'private' }, 'Yes, as a private repository'), h('option', { value: 'public' }, 'Yes, as a public repository'));
+  const owner = h('select', {});
+  const ownerField = field('Owner', owner);
+  ownerField.hidden = true;
+  const ghHint = h('small', { class: 'hint' });
+  publish.addEventListener('change', () => (ownerField.hidden = !publish.value || owner.options.length < 2));
+  // Templates and owners come from GitHub through gh on that server.
+  const loadOptions = async () => {
+    const o = await git.getRepoOptions((script, t) => execOn(server, script, t)).catch(() => null);
+    gitignore.replaceChildren(none(), ...(o?.gitignores || []).map((t) => h('option', { value: t }, t)));
+    license.replaceChildren(none(), ...(o?.licenses || []).map((l) => h('option', { value: l.key }, l.name)));
+    owner.replaceChildren(...(o?.owners || []).map((n) => h('option', { value: n }, n)));
+    gitignore.disabled = license.disabled = !o;
+    publish.disabled = !o;
+    if (!o) publish.value = '';
+    ownerField.hidden = !publish.value || owner.options.length < 2;
+    ghHint.textContent = o ? '' : 'Git Ignore, License and GitHub need the GitHub CLI on the server (gh auth login).';
+  };
   const error = h('div', { class: 'form-error' });
   const btn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Create repository');
   const serverSelect = h(
     'select',
-    { onchange: () => { server = store.servers.find((s) => s.id === serverSelect.value); where.value = parent = parentOf(server); } },
+    { onchange: () => { server = store.servers.find((s) => s.id === serverSelect.value); where.value = parent = parentOf(server); loadOptions(); } },
     store.servers.map((s) => h('option', { value: s.id, selected: s.id === server.id }, s.name || s.host)),
   );
   const closeFn = openModal({
@@ -2053,12 +2074,18 @@ function createRepoModal(preselected) {
       store.servers.length > 1 && field('Server', serverSelect),
       field('Name', name),
       h('label', { class: 'field' }, h('span', {}, 'In folder'), h('div', { class: 'input-row' }, where, h('button', { class: 'btn', type: 'button', onclick: () => folderBrowser(server, where.value.trim() || '~', (p) => (where.value = p)) }, h('span', { html: icons.folder }), 'Choose…'))),
+      field('Description', description),
       h('label', { class: 'check' }, readme, 'Initialize with a README'),
-      field('Also create it on GitHub', publish, 'Uses the GitHub CLI on the server (gh auth login).'),
+      field('Git Ignore', gitignore),
+      field('License', license),
+      field('Also create it on GitHub', publish),
+      ownerField,
+      ghHint,
       error,
     ],
     foot: (close) => [h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'), btn],
   });
+  loadOptions();
   btn.addEventListener('click', async () => {
     const n = name.value.trim().replace(/\s+/g, '-');
     if (!n || /[\/]/.test(n)) return (error.textContent = 'Enter a name without slashes.');
@@ -2068,7 +2095,7 @@ function createRepoModal(preselected) {
     error.textContent = '';
     try {
       const run = (script, t) => execOn(server, script, t);
-      await git.createRepo(run, path, { readme: readme.checked, github: publish.value || null });
+      await git.createRepo(run, path, { readme: readme.checked, description: description.value, gitignore: gitignore.value, license: license.value, github: publish.value || null, owner: owner.value });
       const top = await git.resolveRepo(run, path);
       closeFn();
       addRepos(server, [top]);

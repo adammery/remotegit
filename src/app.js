@@ -13,6 +13,8 @@ const store = Object.assign(
     currentRepoId: null,
     serverFilter: null,
     sidebarWidth: 300,
+    diffOpts: { hideWhitespace: false, split: false },
+    recentRepos: [], // ids, most recently opened first
     theme: 'system',
     commitOpts: { noVerify: false, signoff: false, allowEmpty: false },
   },
@@ -156,6 +158,8 @@ const S = {
   partial: new Map(), // path -> { text, excluded: Set of change-line indexes }
   selectedPath: null,
   filter: '',
+  fileFilters: new Set(), // 'included' | 'excluded' | 'new' | 'modified' | 'deleted'
+  repoSummaries: new Map(), // repo id -> { changes, ahead, behind } for the repository list
   diff: null, // { key, text, truncated }
   diffFull: false,
   busy: null, // label of a running network/commit operation
@@ -177,6 +181,7 @@ const currentFiles = () => S.status?.files || [];
 function selectRepo(repoId) {
   const repo = store.repos.find((r) => r.id === repoId) || null;
   S.gen++;
+  if (repo) store.recentRepos = [repo.id, ...(store.recentRepos || []).filter((id) => id !== repo.id)].slice(0, 5);
   Object.assign(S, {
     repo,
     server: repo ? store.servers.find((s) => s.id === repo.serverId) : null,
@@ -270,7 +275,7 @@ async function refreshDiff() {
   const gen = S.gen;
   const key = `${file.path}\0${file.xy}`;
   try {
-    const d = await git.getFileDiff(ex, S.repo.path, file, hasHead());
+    const d = await git.getFileDiff(ex, S.repo.path, file, hasHead(), { ignoreWhitespace: store.diffOpts.hideWhitespace });
     if (gen !== S.gen || S.selectedPath !== file.path) return;
     if (S.diff && S.diff.key === key && S.diff.text === d.text) return;
     const partial = S.partial.get(file.path);
@@ -358,7 +363,7 @@ async function loadCommitDiff() {
   if (!commit || !commitFile) return;
   const gen = S.gen;
   try {
-    const d = await git.getCommitFileDiff(ex, S.repo.path, commit.sha, commitFile);
+    const d = await git.getCommitFileDiff(ex, S.repo.path, commit.sha, commitFile, { ignoreWhitespace: store.diffOpts.hideWhitespace });
     if (gen !== S.gen || S.commitFile !== commitFile) return;
     S.commitDiff = d;
   } catch (e) {
@@ -703,7 +708,8 @@ const MAX_ROWS = 2000;
 
 function renderChanges() {
   const files = currentFiles();
-  const shown = S.filter ? files.filter((f) => f.path.toLowerCase().includes(S.filter.toLowerCase())) : files;
+  const shown = visibleFiles();
+  renderFilterButton(files);
   const checked = files.filter((f) => !S.excluded.has(f.path)).length;
 
   $('#changes-count').textContent = files.length ? `(${files.length})` : '';
@@ -736,7 +742,7 @@ function renderChanges() {
   const list = $('#file-list');
   const rows = shown.slice(0, MAX_ROWS).map((f) => fileRow(f));
   if (shown.length > MAX_ROWS) rows.push(h('div', { class: 'list-note' }, `…and ${shown.length - MAX_ROWS} more files`));
-  if (S.filter && !shown.length && files.length) rows.push(h('div', { class: 'list-note' }, 'No files match the filter.'));
+  if ((S.filter || S.fileFilters.size) && !shown.length && files.length) rows.push(h('div', { class: 'list-note' }, 'No files match the filter.'));
   list.replaceChildren(...rows);
   renderStashRow();
 
@@ -931,7 +937,7 @@ function renderContent() {
   const filesSha = oldFiles?.dataset.sha;
   const filesScroll = oldFiles?.scrollTop;
   const filesFocused = !!oldFiles && document.activeElement === oldFiles;
-  root.replaceChildren(...[contentView()].flat());
+  root.replaceChildren(...[contentView()].flat().filter((x) => x != null && x !== false));
   root.dataset.key = key;
   const diff = root.querySelector('.diff');
   if (scroll && diff) [diff.scrollTop, diff.scrollLeft] = scroll;
@@ -950,7 +956,7 @@ function contentView() {
   const file = currentFiles().find((f) => f.path === S.selectedPath);
   if (!file) return noChangesView();
   return [
-    h('div', { class: 'diff-header' }, h('span', { class: `file-status ${file.kind}`, html: fileIcon(file.kind) }), h('span', { class: 'path' }, ltr(file.orig ? `${file.orig} → ${file.path}` : file.path))),
+    h('div', { class: 'diff-header' }, h('span', { class: `file-status ${file.kind}`, html: fileIcon(file.kind) }), h('span', { class: 'path' }, ltr(file.orig ? `${file.orig} → ${file.path}` : file.path)), diffSettingsButton()),
     file.kind === 'conflicted' && conflictBar(file),
     diffView(S.diff, file, file.path, {
       before: hasHead() && file.xy !== '??' && file.xy[0] !== 'A' ? { rev: 'HEAD', path: file.orig || file.path } : null,
@@ -983,6 +989,7 @@ function noRepoView() {
   return blank('No repository selected', 'Pick a repository from the toolbar, or add one from a server.', [
     card({ title: 'Add a repository', sub: 'Scan a server for Git repositories or enter a path.', button: 'Add repository', onclick: () => addRepoModal(), primary: true }),
     card({ title: 'Clone a repository', sub: 'From GitHub or any Git URL, into a folder on the server.', button: 'Clone repository', onclick: () => cloneModal() }),
+    card({ title: 'Create a new repository', sub: 'An empty repository in a folder on the server, optionally on GitHub too.', button: 'Create repository', onclick: () => createRepoModal() }),
     card({ title: 'Add another server', sub: 'Connect to a different machine over SSH.', button: 'Add server', onclick: () => serverModal() }),
   ]);
 }
@@ -1170,37 +1177,63 @@ function diffView(d, file, path = file?.path, images = null) {
     return h('div', { class: 'diff' }, h('div', { class: 'diff-notice' }, parsed.notes.length ? parsed.notes.join('\n') : 'No content changes (empty file).'));
 
   // Line picking works for edited and new files; renames and deletions go in whole.
-  const selectable = !!file && (file.kind === 'modified' || file.kind === 'new') && !d.truncated && parsed.changes > 0;
+  // Hiding whitespace shows a different diff than the one committed, so lines can't be picked then.
+  const hideWs = store.diffOpts.hideWhitespace;
+  const selectable = !!file && (file.kind === 'modified' || file.kind === 'new') && !d.truncated && parsed.changes > 0 && !hideWs;
   const excluded = selectable ? excludedLines(file, d.text, parsed.changes) : null;
+  const split = store.diffOpts.split;
   const total = parsed.hunks.reduce((n, hk) => n + hk.lines.length + 1, 0);
   const cap = S.diffFull ? Infinity : DIFF_LINE_CAP;
   const frag = document.createDocumentFragment();
   const sel = () => selectable && h('span', { class: 'selcol' });
   const lang = d.text.length < 400_000 ? languageFor(path) : null;
+  const code = (l, colored) => (colored?.has(l) ? h('span', { class: 'code', html: colored.get(l) || ' ' }) : h('span', { class: 'code' }, l.text || ' '));
+  const lineAttrs = (l) => {
+    const change = l.i != null;
+    return { class: `dl ${l.t}` + (selectable && change && !excluded.has(l.i) ? ' sel' : ''), dataset: selectable && change ? { i: l.i } : null };
+  };
+  // Split view: one side of a row; a context line shows on both sides.
+  const half = (l, side, colored) =>
+    !l
+      ? h('div', { class: 'dl empty' })
+      : h('div', l.t === 'ctx' ? { class: 'dl ctx' } : lineAttrs(l), l.t === 'ctx' ? selectable && h('span', { class: 'selcol' }) : sel(), h('span', { class: 'ln' }, (side === 'old' ? l.o : l.n) ?? ''), h('span', { class: 'sign' }, l.t === 'add' ? '+' : l.t === 'del' ? '-' : ''), code(l, colored));
   let count = 0;
   outer: for (const [hi, hk] of parsed.hunks.entries()) {
     const colored = highlightHunk(hk, lang);
     frag.append(
-      h('div', { class: 'dl hunk', dataset: selectable ? { hunk: hi } : null, title: selectable ? 'Click to include or leave out this whole block' : null }, sel(), h('span', { class: 'ln' }), h('span', { class: 'ln' }), h('span', { class: 'sign' }), h('span', { class: 'code' }, hk.header)),
+      h('div', { class: 'dl hunk', dataset: selectable ? { hunk: hi } : null, title: selectable ? 'Click to include or leave out this whole block' : null }, sel(), h('span', { class: 'ln' }), !split && h('span', { class: 'ln' }), h('span', { class: 'sign' }), h('span', { class: 'code' }, hk.header)),
     );
+    if (split) {
+      let dels = [];
+      let adds = [];
+      const flush = () => {
+        for (let k = 0; k < Math.max(dels.length, adds.length); k++) frag.append(h('div', { class: 'srow' }, half(dels[k], 'old', colored), half(adds[k], 'new', colored)));
+        dels = [];
+        adds = [];
+      };
+      for (const l of hk.lines) {
+        if (++count > cap) break;
+        if (l.t === 'del') dels.push(l);
+        else if (l.t === 'add') adds.push(l);
+        else {
+          flush();
+          frag.append(l.t === 'meta' ? h('div', { class: 'dl meta' }, h('span', { class: 'code' }, l.text)) : h('div', { class: 'srow' }, half(l, 'old', colored), half(l, 'new', colored)));
+        }
+      }
+      flush();
+      if (count > cap) break outer;
+      continue;
+    }
     for (const l of hk.lines) {
       if (++count > cap) break outer;
-      const change = l.i != null;
-      frag.append(
-        h(
-          'div',
-          { class: `dl ${l.t}` + (selectable && change && !excluded.has(l.i) ? ' sel' : ''), dataset: selectable && change ? { i: l.i } : null },
-          sel(),
-          h('span', { class: 'ln' }, l.o ?? ''),
-          h('span', { class: 'ln' }, l.n ?? ''),
-          h('span', { class: 'sign' }, l.t === 'add' ? '+' : l.t === 'del' ? '-' : ''),
-          colored?.has(l) ? h('span', { class: 'code', html: colored.get(l) || ' ' }) : h('span', { class: 'code' }, l.text || ' '),
-        ),
-      );
+      frag.append(h('div', lineAttrs(l), sel(), h('span', { class: 'ln' }, l.o ?? ''), h('span', { class: 'ln' }, l.n ?? ''), h('span', { class: 'sign' }, l.t === 'add' ? '+' : l.t === 'del' ? '-' : ''), code(l, colored)));
     }
   }
-  const table = h('div', { class: 'diff-table' + (selectable ? ' selectable' : '') }, frag);
+  const table = h('div', { class: 'diff-table' + (selectable ? ' selectable' : '') + (split ? ' split' : '') }, frag);
   if (selectable) wireLineSelection(table, file, d, parsed);
+  // Right-click a line of an edited file to throw that change away, like GitHub Desktop.
+  if (file?.kind === 'modified' && !d.truncated && !hideWs && S.tab === 'changes')
+    table.addEventListener('contextmenu', (e) => discardLinesMenu(e, file, d, parsed));
   const extras = [];
   if (count > cap)
     extras.push(h('div', { class: 'diff-notice' }, `Showing ${cap} of ${total} lines.`, h('br'), h('button', { class: 'btn', type: 'button', onclick: () => { S.diffFull = true; renderContent(); } }, 'Show the whole diff')));
@@ -1214,6 +1247,7 @@ function historyView() {
   const head = h(
     'div',
     { class: 'commit-detail-head' },
+    diffSettingsButton('corner'),
     h('h2', {}, c.summary),
     c.body && h('div', { class: 'body' }, c.body),
     h(
@@ -1281,9 +1315,20 @@ function repoPopover() {
   openPopover($('#tb-repo'), (el) => {
     const filter = h('input', { type: 'search', placeholder: 'Filter repositories', oninput: () => fill() });
     const body = h('div', { class: 'pop-body' });
+    const item = (r) =>
+      h(
+        'div',
+        { class: 'pop-item' + (r.id === S.repo?.id ? ' current' : ''), onclick: () => { closePopover(); selectRepo(r.id); }, oncontextmenu: (e) => repoMenu(e, r) },
+        h('span', { html: icons.repo }),
+        h('div', { class: 'grow' }, h('div', { class: 'title' }, repoLabel(r)), h('div', { class: 'sub' }, r.path)),
+        repoBadges(r),
+        h('button', { class: 'btn-icon', type: 'button', title: 'Remove from list (keeps files)', html: icons.x, onclick: (e) => { e.stopPropagation(); removeRepo(r); fill(); } }),
+      );
     const fill = () => {
       const term = filter.value.toLowerCase();
       const shown = filterServer();
+      // Like GitHub Desktop: the last few opened repositories on top, once the list is long.
+      const recent = !term && store.repos.length > 5 ? (store.recentRepos || []).map((id) => store.repos.find((r) => r.id === id)).filter((r) => r && (!shown || r.serverId === shown.id)).slice(0, 3) : [];
       const groups = (shown ? [shown] : store.servers).map((s) => {
         const repos = store.repos.filter((r) => r.serverId === s.id && (repoLabel(r) + r.name + r.path).toLowerCase().includes(term));
         return [
@@ -1294,22 +1339,14 @@ function repoPopover() {
             h('span', { class: 'grow', title: s.host }, s.name || s.host),
             h('button', { class: 'btn-icon', type: 'button', title: 'Add repository from this server', html: icons.plus, onclick: () => { closePopover(); addRepoModal(s); } }),
           ),
-          repos.length
-            ? repos.map((r) =>
-                h(
-                  'div',
-                  { class: 'pop-item' + (r.id === S.repo?.id ? ' current' : ''), onclick: () => { closePopover(); selectRepo(r.id); }, oncontextmenu: (e) => repoMenu(e, r) },
-                  h('span', { html: icons.repo }),
-                  h('div', { class: 'grow' }, h('div', { class: 'title' }, repoLabel(r)), h('div', { class: 'sub' }, r.path)),
-                  h('button', { class: 'btn-icon', type: 'button', title: 'Remove from list (keeps files)', html: icons.x, onclick: (e) => { e.stopPropagation(); removeRepo(r); fill(); } }),
-                ),
-              )
-            : h('div', { class: 'pop-empty' }, term ? 'No matches' : 'No repositories added yet'),
+          repos.length ? repos.map(item) : h('div', { class: 'pop-empty' }, term ? 'No matches' : 'No repositories added yet'),
         ];
       });
-      body.replaceChildren(...groups.flat(Infinity), store.servers.length ? '' : h('div', { class: 'pop-empty' }, 'No servers yet. Add one from the Server menu in the top right.'));
+      const recentGroup = recent.length ? [h('div', { class: 'pop-group' }, h('span', { class: 'grow' }, 'Recent')), recent.map(item)] : [];
+      body.replaceChildren(...[recentGroup, groups].flat(Infinity), store.servers.length ? '' : h('div', { class: 'pop-empty' }, 'No servers yet. Add one from the Server menu in the top right.'));
     };
     fill();
+    loadRepoSummaries(() => popover?.el === el && fill());
     el.append(
       h('div', { class: 'pop-head' }, filter),
       body,
@@ -1318,6 +1355,7 @@ function repoPopover() {
         { class: 'pop-foot' },
         h('button', { class: 'btn btn-primary', type: 'button', disabled: !store.servers.length, onclick: () => { closePopover(); addRepoModal(filterServer()); } }, h('span', { html: icons.plus }), 'Add repository'),
         h('button', { class: 'btn', type: 'button', disabled: !store.servers.length, onclick: () => { closePopover(); cloneModal(filterServer()); } }, h('span', { html: icons.clone }), 'Clone'),
+        h('button', { class: 'btn', type: 'button', disabled: !store.servers.length, onclick: () => { closePopover(); createRepoModal(filterServer()); } }, h('span', { html: icons.repo }), 'New'),
       ),
     );
   }, 360);
@@ -1416,6 +1454,7 @@ const SHORTCUTS = [
   ['Mod+B', 'Switch branch', () => branchPopover()],
   ['Mod+Shift+N', 'New branch', () => S.status && newBranchModal()],
   ['Mod+Shift+O', 'Clone repository', () => cloneModal()],
+  ['Mod+N', 'New repository', () => createRepoModal()],
   ['Mod+Shift+R', 'Create pull request', () => (S.remote.pr && S.remote.branch === S.status?.branch.head ? openExternal(S.remote.pr.url) : canCreatePr() && createPrModal())],
   ['Mod+Shift+S', 'Stash all changes', () => stashAll()],
   ['Mod+F', 'Filter files / search history', () => { const el = $(S.tab === 'history' ? '#history-filter' : '#filter'); el.focus(); el.select(); }],
@@ -1756,7 +1795,7 @@ async function selectStashFile(f) {
   renderContent();
   if (!f) return;
   try {
-    const d = await git.getStashFileDiff(ex, S.repo.path, V.sha, f);
+    const d = await git.getStashFileDiff(ex, S.repo.path, V.sha, f, { ignoreWhitespace: store.diffOpts.hideWhitespace });
     if (S.stashView === V && V.file === f) V.diff = d;
   } catch (e) {
     if (S.stashView === V && V.file === f) V.diff = { error: e.message };
@@ -1774,6 +1813,7 @@ function stashView() {
     h(
       'div',
       { class: 'stash-actions' },
+      diffSettingsButton(),
       h('button', { class: 'btn', type: 'button', disabled: !!S.busy, onclick: () => confirmModal({ title: 'Discard stashed changes?', message: 'The stashed changes will be permanently lost.', confirm: 'Discard', danger: true, onConfirm: () => withBusy('Discard stash', () => git.dropStash(ex, S.repo.path, V.sha)) }) }, 'Discard'),
       h('button', { class: 'btn btn-primary', type: 'button', disabled: !!S.busy, title: changes ? 'Git restores the stash over your current changes when they don’t touch the same files.' : null, onclick: () => withBusy('Restore stash', () => git.restoreStash(ex, S.repo.path, V.sha)) }, 'Restore'),
     ),
@@ -1814,6 +1854,229 @@ function stashAll() {
     confirm: 'Overwrite',
     danger: true,
     onConfirm: run,
+  });
+}
+
+// ============================================================ diff settings
+
+function diffSettingsButton(extra = '') {
+  const on = store.diffOpts.hideWhitespace || store.diffOpts.split;
+  const btn = h('button', { class: `btn-icon diff-settings ${extra}` + (on ? ' on' : ''), type: 'button', title: 'Diff settings', html: icons.gear, onclick: () => diffSettingsPopover(btn) });
+  return btn;
+}
+
+function diffSettingsPopover(anchor) {
+  openPopover(anchor, (el) => {
+    const o = store.diffOpts;
+    const apply = (patch) => {
+      const wsChanged = 'hideWhitespace' in patch && patch.hideWhitespace !== o.hideWhitespace;
+      Object.assign(o, patch);
+      save();
+      closePopover();
+      if (wsChanged) {
+        // Picked lines refer to the full diff; hiding whitespace would mix them up.
+        if (o.hideWhitespace && S.partial.size) {
+          S.partial.clear();
+          renderChanges();
+          toast('Line selections were reset; whole files are committed while whitespace is hidden.');
+        }
+        S.diff = null;
+        S.commitDiff = null;
+        renderContent();
+        if (S.stashView?.file) selectStashFile(S.stashView.file);
+        else if (S.tab === 'history') loadCommitDiff();
+        else refreshDiff();
+      } else renderContent();
+    };
+    el.append(
+      h(
+        'div',
+        { class: 'settings' },
+        h('div', { class: 'settings-title' }, 'Diff Settings'),
+        h('div', { class: 'settings-label' }, 'Whitespace'),
+        h(
+          'label',
+          { class: 'check settings-check' },
+          h('input', { type: 'checkbox', checked: o.hideWhitespace, onchange: (e) => apply({ hideWhitespace: e.target.checked }) }),
+          h('span', {}, h('b', {}, 'Hide Whitespace Changes'), h('br'), h('span', { class: 'hint' }, 'Picking or discarding single lines is off while whitespace is hidden.')),
+        ),
+        h('div', { class: 'settings-label' }, 'Diff display'),
+        [['unified', 'Unified'], ['split', 'Split']].map(([v, label]) =>
+          h('label', { class: 'check settings-check' }, h('input', { type: 'radio', name: 'diff-display', checked: (v === 'split') === o.split, onchange: () => apply({ split: v === 'split' }) }), label),
+        ),
+      ),
+    );
+  }, 260);
+}
+
+function discardLinesMenu(e, file, d, parsed) {
+  const row = e.target.closest('.dl[data-i], .dl.hunk');
+  if (!row || String(getSelection()).trim()) return;
+  e.preventDefault();
+  const hunkOf = (i) => parsed.hunks.findIndex((hk) => hk.lines.some((l) => l.i === i));
+  const hi = row.dataset.hunk != null ? Number(row.dataset.hunk) : hunkOf(Number(row.dataset.i));
+  const block = parsed.hunks[hi]?.lines.filter((l) => l.i != null).map((l) => l.i) || [];
+  const line = row.dataset.i != null ? parsed.hunks[hi].lines.find((l) => l.i === Number(row.dataset.i)) : null;
+  const confirm = (indexes, what) =>
+    confirmModal({
+      title: `Discard ${what}?`,
+      message: `The ${what} in “${file.path}” will be permanently lost on the server.`,
+      confirm: 'Discard',
+      danger: true,
+      onConfirm: () =>
+        withBusy('Discard', async () => {
+          await git.discardLines(ex, S.repo.path, d.text, indexes);
+          S.partial.delete(file.path);
+        }),
+    });
+  openMenu(e.clientX, e.clientY, [
+    line && { label: line.t === 'add' ? 'Discard Added Line…' : 'Discard Removed Line…', disabled: !!S.busy, run: () => confirm([line.i], line.t === 'add' ? 'added line' : 'removed line') },
+    block.length > 1 && { label: `Discard This Block (${block.length} lines)…`, disabled: !!S.busy, run: () => confirm(block, 'changes in this block') },
+  ]);
+}
+
+// ============================================================ file filters
+
+const FILE_FILTERS = [
+  ['included', 'Included in commit', (f) => !S.excluded.has(f.path)],
+  ['excluded', 'Excluded from commit', (f) => S.excluded.has(f.path)],
+  ['new', 'New files', (f) => f.kind === 'new'],
+  ['modified', 'Modified files', (f) => f.kind === 'modified' || f.kind === 'renamed' || f.kind === 'conflicted'],
+  ['deleted', 'Deleted files', (f) => f.kind === 'deleted'],
+];
+
+// Text filter plus the filter options: any of the checked ones in a group
+// (commit / kind), and both groups when both have some checked.
+function visibleFiles() {
+  const term = S.filter.toLowerCase();
+  const pick = (keys) => {
+    const active = FILE_FILTERS.filter(([k]) => keys.includes(k) && S.fileFilters.has(k));
+    return (f) => !active.length || active.some(([, , test]) => test(f));
+  };
+  const commitGroup = pick(['included', 'excluded']);
+  const kindGroup = pick(['new', 'modified', 'deleted']);
+  return currentFiles().filter((f) => (!term || f.path.toLowerCase().includes(term)) && commitGroup(f) && kindGroup(f));
+}
+
+function renderFilterButton(files) {
+  const btn = $('#filter-opts');
+  btn.classList.toggle('on', S.fileFilters.size > 0);
+  btn.disabled = !files.length && !S.fileFilters.size;
+}
+
+function filterOptionsPopover() {
+  openPopover($('#filter-opts'), (el) => {
+    const fill = () => {
+      const files = currentFiles();
+      el.replaceChildren(
+        h('div', { class: 'settings' },
+          h('div', { class: 'settings-title' }, 'Filter Options', h('button', { class: 'btn-icon', type: 'button', title: 'Close', html: icons.x, onclick: closePopover })),
+          FILE_FILTERS.map(([key, label, test]) =>
+            h(
+              'label',
+              { class: 'check settings-check' },
+              h('input', {
+                type: 'checkbox',
+                checked: S.fileFilters.has(key),
+                onchange: (e) => {
+                  if (e.target.checked) S.fileFilters.add(key);
+                  else S.fileFilters.delete(key);
+                  renderChanges();
+                  fill();
+                },
+              }),
+              `${label} (${files.filter(test).length})`,
+            ),
+          ),
+          S.fileFilters.size > 0 && h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { S.fileFilters.clear(); renderChanges(); fill(); } }, 'Clear filters'),
+        ),
+      );
+    };
+    fill();
+  }, 240);
+}
+
+// ============================================================ repository list status
+
+// Changes and ahead/behind for the repositories in the list: one command per
+// server, only while the list is open.
+async function loadRepoSummaries(onUpdate) {
+  for (const server of store.servers) {
+    const repos = store.repos.filter((r) => r.serverId === server.id);
+    if (!repos.length) continue;
+    git
+      .repoSummaries((script, t) => execOn(server, script, t), repos.map((r) => r.path))
+      .then((res) => {
+        for (const r of repos) if (res[r.path]) S.repoSummaries.set(r.id, res[r.path]);
+        onUpdate();
+      }, () => {});
+  }
+}
+
+function repoBadges(r) {
+  const st = r.id === S.repo?.id && S.status ? { changes: S.status.files.length, ahead: S.status.branch.ahead, behind: S.status.branch.behind } : S.repoSummaries.get(r.id);
+  if (!st) return null;
+  return h(
+    'span',
+    { class: 'repo-badges' },
+    st.behind > 0 && h('span', { class: 'repo-ab', title: `${st.behind} commit${st.behind > 1 ? 's' : ''} to pull` }, String(st.behind), h('span', { html: icons.down })),
+    st.ahead > 0 && h('span', { class: 'repo-ab', title: `${st.ahead} commit${st.ahead > 1 ? 's' : ''} to push` }, String(st.ahead), h('span', { html: icons.up })),
+    st.changes > 0 && h('span', { class: 'repo-dot', title: `${st.changes} uncommitted change${st.changes > 1 ? 's' : ''}` }),
+  );
+}
+
+// ============================================================ new repository
+
+function createRepoModal(preselected) {
+  if (!store.servers.length) return serverModal();
+  let server = preselected || filterServer() || S.server || store.servers[0];
+  const parentOf = (srv) => {
+    const last = store.repos.filter((r) => r.serverId === srv.id).pop();
+    return last ? last.path.replace(/\/[^/]+\/?$/, '') || '~' : '~';
+  };
+  let parent = parentOf(server);
+  const name = h('input', { placeholder: 'my-project', spellcheck: false });
+  const where = h('input', { spellcheck: false, value: parent });
+  const readme = h('input', { type: 'checkbox', checked: true });
+  const publish = h('select', {}, h('option', { value: '' }, 'No, only on the server'), h('option', { value: 'private' }, 'Yes, as a private repository'), h('option', { value: 'public' }, 'Yes, as a public repository'));
+  const error = h('div', { class: 'form-error' });
+  const btn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Create repository');
+  const serverSelect = h(
+    'select',
+    { onchange: () => { server = store.servers.find((s) => s.id === serverSelect.value); where.value = parent = parentOf(server); } },
+    store.servers.map((s) => h('option', { value: s.id, selected: s.id === server.id }, s.name || s.host)),
+  );
+  const closeFn = openModal({
+    title: 'Create a new repository',
+    wide: true,
+    body: [
+      store.servers.length > 1 && field('Server', serverSelect),
+      field('Name', name),
+      h('label', { class: 'field' }, h('span', {}, 'In folder'), h('div', { class: 'input-row' }, where, h('button', { class: 'btn', type: 'button', onclick: () => folderBrowser(server, where.value.trim() || '~', (p) => (where.value = p)) }, h('span', { html: icons.folder }), 'Choose…'))),
+      h('label', { class: 'check' }, readme, 'Initialize with a README'),
+      field('Also create it on GitHub', publish, 'Uses the GitHub CLI on the server (gh auth login).'),
+      error,
+    ],
+    foot: (close) => [h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'), btn],
+  });
+  btn.addEventListener('click', async () => {
+    const n = name.value.trim().replace(/\s+/g, '-');
+    if (!n || /[\/]/.test(n)) return (error.textContent = 'Enter a name without slashes.');
+    const path = `${where.value.trim().replace(/\/+$/, '') || '~'}/${n}`;
+    btn.disabled = true;
+    btn.textContent = 'Creating…';
+    error.textContent = '';
+    try {
+      const run = (script, t) => execOn(server, script, t);
+      await git.createRepo(run, path, { readme: readme.checked, github: publish.value || null });
+      const top = await git.resolveRepo(run, path);
+      closeFn();
+      addRepos(server, [top]);
+    } catch (e) {
+      error.textContent = e.message;
+      btn.disabled = false;
+      btn.textContent = 'Create repository';
+    }
   });
 }
 
@@ -3048,7 +3311,7 @@ function setTab(tab) {
 
 function moveSelection(delta) {
   if (S.tab === 'changes') {
-    const files = currentFiles().filter((f) => !S.filter || f.path.toLowerCase().includes(S.filter.toLowerCase()));
+    const files = visibleFiles();
     const i = files.findIndex((f) => f.path === S.selectedPath);
     const next = files[Math.max(0, Math.min(files.length - 1, i + delta))];
     if (next) {
@@ -3144,6 +3407,7 @@ function init() {
   });
   for (const t of document.querySelectorAll('.tab')) t.addEventListener('click', () => setTab(t.dataset.tab));
 
+  $('#filter-opts').addEventListener('click', filterOptionsPopover);
   $('#filter').addEventListener('input', (e) => {
     S.filter = e.target.value;
     renderChanges();

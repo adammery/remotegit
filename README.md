@@ -26,7 +26,9 @@ RemoteGit checks for new versions on its own and shows a popup with **Install an
 
 **Changes**
 - Changed files with checkboxes and a diff with line numbers and **syntax highlighting** (GitHub's colors, about 35 languages).
-- **Commit only some lines**: click the gutter (or drag over it) to choose lines, or click a `@@` header for the whole block.
+- **Commit only some lines**: click the gutter (or drag over it) to choose lines, or click a `@@` header for the whole block. Right-click a line to **discard** just that line or its block.
+- **Diff settings** (⚙ above the diff): **Unified** or **Split** (side by side), and **Hide whitespace changes**.
+- **Filter options** next to the file filter: included in / excluded from the commit, new, modified or deleted files.
 - Summary, description, **co-authors** (`@login` or `Name <email>`), and options to bypass hooks, add a Signed-off-by trailer or allow an empty commit.
 - **AI commit message**: the ✨ button asks Claude Code or Codex on the server to describe the selected changes in the style of your recent commits. When both are installed, a small menu lets you pick one. Codex runs read-only. No API key in the app.
 - **Undo** the last commit. Right-click a file to discard it, add it to `.gitignore`, or copy its path.
@@ -56,6 +58,9 @@ RemoteGit checks for new versions on its own and shows a popup with **Install an
 
 **Servers and repositories**
 - Several servers; the **Server** menu filters the repository list to one server or shows all.
+- The repository list shows which repositories have **uncommitted changes** (•) and commits to **push** (↑) or **pull** (↓), with the **Recent** ones on top.
+- Right-click a repository: **alias**, **worktrees** (show them, or add one for another branch), copy name or path, View on GitHub, terminal, Finder, VS Code, remove.
+- **New** creates a repository on the server (with a README, and optionally on GitHub too); **Clone** clones one.
 - **This computer**: use repositories on your own Mac or PC as well, like GitHub Desktop (needs git; on Windows, Git for Windows).
 - **Test connection** checks SSH, git, the GitHub CLI, Claude Code and Codex on the server.
 - Add repositories by scanning the server (`~`, `/var/www`, `/srv`), by path, or with a **folder browser** that walks the server's folders.
@@ -66,6 +71,7 @@ RemoteGit checks for new versions on its own and shows a popup with **Install an
 - Turn on **Show in menu bar** (⚙ in the top right) for an icon in the macOS menu bar or the Windows system tray, with the number of changes next to it.
 - Click it for a small window: changed files, commit everything with an optional AI message, push or pull, and Undo. Handy when an AI does the work on the server and you only check in now and then.
 - **Hide from the Dock** keeps RemoteGit only in the menu bar; closing the main window leaves it running there.
+- **Updates** download in the background; a slim bar at the bottom offers what's new and a restart, like GitHub Desktop.
 
 <img src="docs/menubar.png" alt="Menu bar window" width="360">
 
@@ -84,7 +90,7 @@ RemoteGit checks for new versions on its own and shows a popup with **Install an
 | `⌘1` / `⌘2` | Changes / History |
 | `⌘T` / `⌘B` / `⌘⇧L` | Switch repository / branch / server |
 | `⌘⇧N` | New branch |
-| `⌘⇧O` | Clone repository |
+| `⌘N` / `⌘⇧O` | New repository / Clone repository |
 | `⌘⇧R` | Create or view the pull request |
 | `⌘⇧S` | Stash all changes |
 | `⌘F` | Filter files / search history |

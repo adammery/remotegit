@@ -200,10 +200,10 @@ true`,
   return files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
-export function getStashFileDiff(exec, repo, sha, file) {
+export function getStashFileDiff(exec, repo, sha, file, { ignoreWhitespace = false } = {}) {
   const paths = [file.path, file.orig].filter(Boolean).map(q).join(' ');
   const to = file.untracked ? sha + '^3' : sha;
-  return diffOutput(exec, inRepo(repo, limited(`${GIT} diff --no-color --no-ext-diff -M ${q(sha + '^1')} ${q(to)} -- ${paths}`)));
+  return diffOutput(exec, inRepo(repo, limited(`${GIT} diff --no-color --no-ext-diff -M${ws(ignoreWhitespace)} ${q(sha + '^1')} ${q(to)} -- ${paths}`)));
 }
 
 function kindOf(xy) {
@@ -215,6 +215,7 @@ function kindOf(xy) {
 // ---------------------------------------------------------------- diffs
 
 const limited = (cmd) => `${cmd} | head -c ${DIFF_LIMIT + 1}`;
+const ws = (ignore) => (ignore ? ' -w' : '');
 
 async function diffOutput(exec, script) {
   const r = await exec(script, 60);
@@ -225,20 +226,20 @@ async function diffOutput(exec, script) {
 }
 
 /** Working tree vs HEAD for one changed file, like GitHub Desktop shows it. */
-export function getFileDiff(exec, repo, file, hasHead) {
+export function getFileDiff(exec, repo, file, hasHead, { ignoreWhitespace = false } = {}) {
   const paths = [file.path, file.orig].filter(Boolean).map(q).join(' ');
   const cmd =
     file.xy === '??' || !hasHead
       ? `${GIT} diff --no-index --no-color --no-ext-diff -- /dev/null ${q(file.path)}`
-      : `${GIT} diff HEAD --no-color --no-ext-diff -M -- ${paths}`;
+      : `${GIT} diff HEAD --no-color --no-ext-diff -M${ws(ignoreWhitespace)} -- ${paths}`;
   return diffOutput(exec, inRepo(repo, limited(cmd)));
 }
 
-export function getCommitFileDiff(exec, repo, sha, file) {
+export function getCommitFileDiff(exec, repo, sha, file, { ignoreWhitespace = false } = {}) {
   const paths = [file.path, file.orig].filter(Boolean).map(q).join(' ');
   return diffOutput(
     exec,
-    inRepo(repo, limited(`${GIT} show -m --first-parent --format= --no-color --no-ext-diff -M ${q(sha)} -- ${paths}`)),
+    inRepo(repo, limited(`${GIT} show -m --first-parent --format= --no-color --no-ext-diff -M${ws(ignoreWhitespace)} ${q(sha)} -- ${paths}`)),
   );
 }
 
@@ -792,6 +793,54 @@ else ${GIT} clone -q ${q(`https://github.com/${src}.git`)} ${qpath(path)}; fi`
   );
 }
 
+/**
+ * A new repository at `path` (created if needed), on branch main, optionally
+ * with a README as its first commit and published to GitHub through `gh`.
+ */
+export async function createRepo(exec, path, { readme = true, github = null } = {}) {
+  const name = path.replace(/\/+$/, '').split('/').pop();
+  await run(
+    exec,
+    `[ -e ${qpath(path)}/.git ] && { echo ${q(`${path} is already a Git repository.`)} >&2; exit 1; }
+mkdir -p ${qpath(path)} && cd ${qpath(path)} || exit 1
+${GIT} init -q || exit $?
+${GIT} symbolic-ref HEAD refs/heads/main
+${readme ? `[ -e README.md ] || printf '# %s\\n' ${q(name)} > README.md
+${GIT} add -A && ${GIT} commit -q -m 'Initial commit'` : 'true'}`,
+    60,
+  );
+  if (github)
+    await run(
+      exec,
+      `${ghPath}\ncd ${qpath(path)} && ${GH} repo create ${q(name)} --${github === 'public' ? 'public' : 'private'} --source . --remote origin${readme ? ' --push' : ''}`,
+      NET_TIMEOUT,
+    );
+}
+
+/**
+ * Changes and ahead/behind for several repositories on one server in one go,
+ * for the repository list: { path: { changes, ahead, behind } }.
+ */
+export async function repoSummaries(exec, paths) {
+  if (!paths.length) return {};
+  const out = await run(
+    exec,
+    `for p in ${paths.map(qpath).join(' ')}; do
+  printf '%s\\037' "$p"
+  (cd "$p" 2>/dev/null && ${GIT} status --porcelain=v2 --branch 2>/dev/null) | awk '/^# branch.ab/ { a = $3; b = $4 } !/^#/ { n++ } END { print n + 0, a + 0, -b }'
+done`,
+    60,
+  );
+  const result = {};
+  paths.forEach((p, i) => {
+    const line = out.split('\n').filter(Boolean)[i];
+    const [, nums = ''] = (line || '').split('\x1f');
+    const [changes, ahead, behind] = nums.trim().split(' ').map(Number);
+    result[p] = { changes: changes || 0, ahead: ahead || 0, behind: behind || 0 };
+  });
+  return result;
+}
+
 /** Folders in `path` on the server, for the in-app folder browser. */
 export async function listDir(exec, path) {
   const out = await run(
@@ -828,6 +877,39 @@ if ${GIT} rev-parse -q --verify HEAD~1 >/dev/null; then ${GIT} reset -q --soft H
 else ${GIT} update-ref -d HEAD; fi`,
     ),
   );
+
+/**
+ * Throws away the changes numbered `indexes` (parseDiff's `i`) of a modified
+ * file, from the diff text the user saw. Fails without touching the file when
+ * it changed since.
+ */
+export function discardLines(exec, repo, diffText, indexes) {
+  const keep = new Set(indexes);
+  const total = parseDiff(diffText).changes;
+  // The patch has to fit the file as it is now, so build it on the reversed diff
+  // (working tree -> HEAD): other changes stay as context, the chosen ones are undone.
+  const patch = buildPartialPatch(reverseDiff(diffText), new Set([...Array(total).keys()].filter((i) => !keep.has(i))));
+  if (!patch) return Promise.resolve();
+  return run(exec, inRepo(repo, `printf '%s' ${q(patch)} | ${GIT} apply --recount --whitespace=nowarn -`)).catch((e) => {
+    throw new GitError(/patch does not apply|while searching/.test(e.message) ? 'The file changed in the meantime. Look at the diff again and retry.' : e.message);
+  });
+}
+
+/** The same diff the other way round; change lines keep their order (and indexes). */
+function reverseDiff(text) {
+  return text
+    .split('\n')
+    .map((line) => {
+      const m = /^@@ -(\d+(?:,\d+)?) \+(\d+(?:,\d+)?) @@(.*)$/.exec(line);
+      if (m) return `@@ -${m[2]} +${m[1]} @@${m[3]}`;
+      if (line.startsWith('--- a/')) return '--- b/' + line.slice(6);
+      if (line.startsWith('+++ b/')) return '+++ a/' + line.slice(6);
+      if (line[0] === '+' && !line.startsWith('+++')) return '-' + line.slice(1);
+      if (line[0] === '-' && !line.startsWith('---')) return '+' + line.slice(1);
+      return line;
+    })
+    .join('\n');
+}
 
 export function discard(exec, repo, files) {
   const cmds = files.map((f) => {

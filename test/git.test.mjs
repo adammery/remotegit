@@ -677,3 +677,55 @@ test('worktrees: list and add for a new and an existing branch', async () => {
   assert.equal(sh(join(root, 'wt-new'), 'git branch --show-current').trim(), 'feature/new');
   await assert.rejects(git.addWorktree(exec, dir, join(root, 'wt again'), 'existing'), /already (checked out|used by worktree)/);
 });
+
+test('discardLines removes only the chosen lines; -w hides whitespace edits', async () => {
+  const dir = newRepo();
+  writeFileSync(join(dir, 'f.txt'), 'one\ntwo\nthree\nfour\n');
+  sh(dir, 'git add -A && git commit -qm init');
+  writeFileSync(join(dir, 'f.txt'), 'one\nTWO\nthree\nfour\nfive\n');
+  const st = await git.getStatus(exec, dir);
+  const { text } = await git.getFileDiff(exec, dir, st.files[0], true);
+  const lines = git.parseDiff(text).hunks.flatMap((hk) => hk.lines).filter((l) => l.i != null);
+  // Throw away the added "five" only.
+  await git.discardLines(exec, dir, text, [lines.find((l) => l.text === 'five').i]);
+  assert.equal(readFileSync(join(dir, 'f.txt'), 'utf8'), 'one\nTWO\nthree\nfour\n');
+  // Then the removed "two" and its replacement: back to the original.
+  const d2 = (await git.getFileDiff(exec, dir, st.files[0], true)).text;
+  await git.discardLines(exec, dir, d2, git.parseDiff(d2).hunks.flatMap((hk) => hk.lines).filter((l) => l.i != null).map((l) => l.i));
+  assert.equal(sh(dir, 'git status --porcelain'), '');
+  // A stale diff is refused.
+  writeFileSync(join(dir, 'f.txt'), 'one\nTWO\nthree\nfour\n');
+  const stale = (await git.getFileDiff(exec, dir, st.files[0], true)).text;
+  writeFileSync(join(dir, 'f.txt'), 'changed\nmeanwhile\n');
+  await assert.rejects(git.discardLines(exec, dir, stale, [0, 1]), /changed in the meantime/);
+
+  writeFileSync(join(dir, 'f.txt'), 'one\n  two\nthree\nfour\n');
+  assert.match((await git.getFileDiff(exec, dir, st.files[0], true)).text, /\+  two/);
+  assert.equal((await git.getFileDiff(exec, dir, st.files[0], true, { ignoreWhitespace: true })).text, '');
+});
+
+test('repoSummaries counts changes and ahead/behind per repository', async () => {
+  const a = newRepo();
+  sh(a, 'git commit -q --allow-empty -m init');
+  writeFileSync(join(a, 'x.txt'), 'x');
+  const bare = join(root, `sum-bare${n}`);
+  sh(root, `git init -q --bare ${bare}`);
+  const b = newRepo();
+  sh(b, `git commit -q --allow-empty -m init && git remote add origin ${bare} && git push -q -u origin main && git commit -q --allow-empty -m two`);
+  const res = await git.repoSummaries(exec, [a, b, join(root, 'missing dir')]);
+  assert.deepEqual(res[a], { changes: 1, ahead: 0, behind: 0 });
+  assert.deepEqual(res[b], { changes: 0, ahead: 1, behind: 0 });
+  assert.deepEqual(res[join(root, 'missing dir')], { changes: 0, ahead: 0, behind: 0 });
+});
+
+test('createRepo makes main with a README commit and refuses an existing repo', async () => {
+  const dir = join(root, 'brand new', 'my-app');
+  await git.createRepo(exec, dir);
+  assert.equal(sh(dir, 'git branch --show-current').trim(), 'main');
+  assert.equal(readFileSync(join(dir, 'README.md'), 'utf8'), '# my-app\n');
+  assert.equal(sh(dir, 'git log --format=%s').trim(), 'Initial commit');
+  await assert.rejects(git.createRepo(exec, dir), /already a Git repository/);
+  const empty = join(root, 'empty-repo');
+  await git.createRepo(exec, empty, { readme: false });
+  assert.equal((await git.getStatus(exec, empty)).branch.oid, null);
+});

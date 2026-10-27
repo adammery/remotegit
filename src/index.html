@@ -59,9 +59,12 @@
           </nav>
 
           <section class="pane" id="changes-pane">
-            <div class="filter-row">
-              <span class="filter-icon" data-icon="search"></span>
-              <input id="filter" type="search" placeholder="Filter" spellcheck="false" autocomplete="off" />
+            <div class="filter-row has-opts">
+              <button class="filter-opts" id="filter-opts" type="button" title="Filter options" data-icon="filter"></button>
+              <span class="filter-field">
+                <span class="filter-icon" data-icon="search"></span>
+                <input id="filter" type="search" placeholder="Filter" spellcheck="false" autocomplete="off" />
+              </span>
             </div>
             <label class="files-header" id="files-header">
               <input type="checkbox" id="check-all" />

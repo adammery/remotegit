@@ -765,3 +765,31 @@ kbd { font: 12px var(--mono); padding: 1px 6px; border: 1px solid var(--border);
 .conflict-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .conflict-actions .btn { display: inline-flex; align-items: center; gap: 4px; }
 .conflict-actions .btn svg { width: 12px; height: 12px; }
+
+.filter-row.has-opts { display: flex; align-items: center; gap: 6px; }
+.filter-field { position: relative; flex: 1; min-width: 0; }
+.filter-row.has-opts .filter-icon { left: 7px; top: 50%; transform: translateY(-50%); display: inline-flex; }
+.filter-opts { flex: none; width: 30px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--muted); cursor: pointer; }
+.filter-opts:hover:not(:disabled) { color: var(--text); }
+.filter-opts.on { color: var(--accent); border-color: var(--accent); }
+.filter-opts:disabled { opacity: 0.5; cursor: default; }
+.settings-title { display: flex; align-items: center; justify-content: space-between; font-weight: 600; font-size: 14px; }
+.diff-header .diff-settings { margin-left: auto; }
+.btn-icon.diff-settings.on { color: var(--accent); }
+.commit-detail-head { position: relative; }
+.diff-settings.corner { position: absolute; top: 10px; right: 10px; }
+.repo-badges { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.repo-ab { display: inline-flex; align-items: center; gap: 1px; padding: 0 6px; height: 18px; border-radius: 9px; background: var(--panel); border: 1px solid var(--border); font-size: 11px; font-weight: 600; color: var(--muted); }
+.repo-ab svg { width: 11px; height: 11px; }
+.repo-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.diff-table.split { display: block; }
+.diff-table.split .srow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.diff-table.split .dl { display: flex; min-width: 0; }
+.diff-table.split .dl > span { display: block; }
+.diff-table.split .dl .ln { flex: none; width: 48px; min-width: 48px; box-sizing: border-box; }
+.diff-table.split .dl .selcol { flex: none; width: 20px; min-width: 20px; }
+.diff-table.split .dl .sign { flex: none; width: 18px; }
+.diff-table.split .dl .code { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-all; }
+.diff-table.split .srow > .dl:first-child { border-right: 1px solid var(--border); }
+.diff-table.split .dl.empty { background: repeating-linear-gradient(135deg, transparent 0 6px, rgba(128,128,128,.08) 6px 12px); }
+.diff-table.split .dl.hunk, .diff-table.split .dl.meta { width: 100%; }

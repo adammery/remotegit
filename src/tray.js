@@ -65,15 +65,17 @@ async function execOn(server, script, timeoutSecs = 60) {
 // ---------------------------------------------------------------- state
 
 // picking: false | 'repo' | 'branch' | 'settings' — what replaces the changes.
-const T = { repo: null, server: null, status: null, head: null, error: null, busy: null, picking: false, branches: null, gen: 0, description: '' };
+// excluded: paths left unchecked, like the main window's checkboxes.
+const T = { repo: null, server: null, status: null, head: null, error: null, busy: null, picking: false, branches: null, excluded: new Set(), gen: 0, description: '' };
 const ex = (script, t) => execOn(T.server, script, t);
+const checkedFiles = () => (T.status?.files || []).filter((f) => !T.excluded.has(f.path));
 
 function selectRepo(id) {
   main = read(MAIN_KEY);
   const repos = main.repos || [];
   const repo = repos.find((r) => r.id === id) || repos.find((r) => r.id === main.currentRepoId) || repos[0] || null;
   T.gen++;
-  Object.assign(T, { repo, server: repo && (main.servers || []).find((s) => s.id === repo.serverId), status: null, head: null, error: null, picking: false });
+  Object.assign(T, { repo, server: repo && (main.servers || []).find((s) => s.id === repo.serverId), status: null, head: null, error: null, picking: false, excluded: new Set() });
   if (repo) writePrefs({ repoId: repo.id });
   render();
   refresh();
@@ -91,6 +93,8 @@ async function refresh() {
     const changed = T.status?.raw !== st.raw || T.error;
     T.status = st;
     T.error = null;
+    const paths = new Set(st.files.map((f) => f.path));
+    for (const p of T.excluded) if (!paths.has(p)) T.excluded.delete(p);
     if (moved) T.head = st.branch.oid ? await git.getHeadCommit(ex, T.repo.path).catch(() => null) : null;
     if (changed || moved) render();
     updateTrayStatus();
@@ -141,10 +145,11 @@ function syncAction() {
 async function commitAll() {
   const summary = document.getElementById('tray-summary')?.value.trim();
   const st = T.status;
-  if (!summary || !st?.files.length) return;
+  const files = checkedFiles();
+  if (!summary || !files.length) return;
   const push = !!prefs.pushAfterCommit && !!st.remote;
   await busy(push ? 'Committing and pushing' : 'Committing', async () => {
-    await git.commit(ex, T.repo.path, { files: st.files, all: true, summary, description: T.description, ...(main.commitOpts || {}) });
+    await git.commit(ex, T.repo.path, { files, all: files.length === st.files.length, summary, description: T.description, ...(main.commitOpts || {}) });
     T.description = '';
     if (push && st.remote && st.branch.head)
       await git.push(ex, T.repo.path, { remote: st.remote.name, hasUpstream: !!st.branch.upstream });
@@ -152,7 +157,7 @@ async function commitAll() {
 }
 
 async function generate() {
-  if (!T.status?.files.length || T.busy) return;
+  if (!checkedFiles().length || T.busy) return;
   let tools = [];
   await busy('Writing the message', async () => {
     tools = await git.findAiTools(ex);
@@ -167,7 +172,7 @@ async function generate() {
 }
 
 async function write(tool) {
-  const m = await git.generateCommitMessage(ex, T.repo.path, T.status.files, !!T.status.branch.oid, tool);
+    const m = await git.generateCommitMessage(ex, T.repo.path, checkedFiles(), !!T.status.branch.oid, tool);
   if (!m) throw new Error('That AI is no longer on the server.');
   T.draft = m.summary;
   T.description = m.description;
@@ -400,12 +405,32 @@ function statusParts() {
       h(
         'div',
         { class: 'tray-files' },
-        h('div', { class: 'files-title' }, `${files.length} changed file${files.length === 1 ? '' : 's'}`),
+        h(
+          'label',
+          { class: 'files-title check' },
+          h('input', {
+            type: 'checkbox',
+            checked: checkedFiles().length === files.length,
+            indeterminate: checkedFiles().length > 0 && checkedFiles().length < files.length,
+            onchange: (e) => {
+              if (e.target.checked) T.excluded.clear();
+              else for (const f of files) T.excluded.add(f.path);
+              render();
+            },
+          }),
+          `${files.length} changed file${files.length === 1 ? '' : 's'}`,
+        ),
         files.slice(0, FILES_SHOWN).map((f) => {
           const i = f.path.lastIndexOf('/');
+          const toggle = () => {
+            if (T.excluded.has(f.path)) T.excluded.delete(f.path);
+            else T.excluded.add(f.path);
+            render();
+          };
           return h(
             'div',
-            { class: 'file-row', title: f.path, onclick: openMain },
+            { class: 'file-row', title: `${f.path}\nDouble-click to open it in RemoteGit`, onclick: toggle, ondblclick: () => openFile(f.path), oncontextmenu: (e) => fileMenu(e, f) },
+            h('input', { type: 'checkbox', checked: !T.excluded.has(f.path), onclick: (e) => e.stopPropagation(), onchange: toggle }),
             h('span', { class: 'file-path' }, h('span', { class: 'dir' }, `‎${i < 0 ? '' : f.path.slice(0, i + 1)}‎`), h('span', { class: 'name' }, f.path.slice(i + 1))),
             h('span', { class: `file-status ${f.kind}`, html: fileIcon(f.kind) }),
           );
@@ -451,7 +476,7 @@ function statusParts() {
 function updateCommitButton() {
   const btn = document.getElementById('tray-commit-btn');
   if (!btn) return;
-  const n = T.status?.files.length || 0;
+  const n = checkedFiles().length;
   const branch = T.status?.branch.head || 'HEAD';
   btn.disabled = !document.getElementById('tray-summary')?.value.trim() || !!T.busy || !n;
   btn.replaceChildren(
@@ -462,6 +487,31 @@ function updateCommitButton() {
 }
 
 // ---------------------------------------------------------------- window
+
+function fileMenu(e, f) {
+  e.preventDefault();
+  const st = T.status;
+  openMenu(e.clientX, e.clientY, [
+    { label: 'Open in RemoteGit', run: () => openFile(f.path) },
+    st.branch.head && {
+      label: st.stash ? 'Stash all changes (replaces the stash)' : 'Stash all changes',
+      disabled: !!T.busy,
+      run: () =>
+        busy('Stashing changes', async () => {
+          if (st.stash) await git.dropStash(ex, T.repo.path, st.stash.sha);
+          await git.stashChanges(ex, T.repo.path, st.branch.head);
+        }),
+    },
+    '-',
+    { label: 'Copy relative path', run: () => navigator.clipboard?.writeText(f.path).catch(() => {}) },
+  ]);
+}
+
+// Shows the main window on this file's diff.
+function openFile(path) {
+  tauri.event?.emit('show-file', { repoId: T.repo.id, path }).catch(() => {});
+  openMain();
+}
 
 function openMain() {
   tauri.core.invoke('show_main_window').catch(() => {});

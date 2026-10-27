@@ -791,6 +791,7 @@ function fileMenu(e, f) {
   const items = [
     { label: 'Discard changes…', danger: true, run: () => confirmDiscard([f]) },
     selectedFiles.length > 1 && { label: `Discard ${selectedFiles.length} selected changes…`, danger: true, run: () => confirmDiscard(selectedFiles) },
+    S.status?.branch.head && { label: 'Stash all changes', disabled: !!S.busy, run: stashAll },
     '-',
     f.xy === '??' && { label: 'Ignore file (add to .gitignore)', run: () => withBusy('Ignore', () => git.ignorePath(ex, S.repo.path, f.path)) },
     { label: 'Copy file path', run: () => copyText(`${S.repo.path}/${f.path}`) },
@@ -2552,6 +2553,14 @@ function init() {
   $('#tb-server').addEventListener('click', serverPopover);
   $('#tb-settings').addEventListener('click', settingsPopover);
   // The menu bar window owns no settings of its own; the theme is stored here.
+  tauri.event?.listen('show-file', ({ payload }) => {
+    if (S.repo?.id !== payload.repoId) {
+      selectRepo(payload.repoId);
+      S.selectedPath = payload.path;
+    }
+    setTab('changes');
+    selectFile(payload.path);
+  });
   tauri.event?.listen('set-theme', (e) => {
     store.theme = e.payload;
     save();

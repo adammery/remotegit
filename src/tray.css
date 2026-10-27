@@ -60,6 +60,8 @@ html.rounded .tray { border-radius: 10px; overflow: hidden; background: var(--si
 .tray-files { flex: 1; min-height: 0; overflow-y: auto; }
 .tray-files .files-title { padding: 8px 10px 4px; color: var(--muted); font-size: 12px; font-weight: 600; }
 .tray-files .file-row { height: 28px; cursor: default; }
+.tray-files .file-row input, .tray-files .files-title input { margin: 0 8px 0 0; flex: none; }
+.tray-files .files-title.check { display: flex; align-items: center; padding: 8px 10px 4px; cursor: default; }
 .tray-files .list-note { padding: 6px 10px; }
 .tray-clean { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; height: 100%; color: var(--muted); text-align: center; padding: 20px; }
 .tray-clean b { color: var(--text); font-size: 14px; }

@@ -1,6 +1,6 @@
 import * as git from './git.js';
 import { icons, fileIcon } from './icons.js';
-import { h, ago, targetOf, undoable as undoableCommit, openMenu, closeMenu, readKey, STORE_KEY, TRAY_KEY } from './ui.js';
+import { h, ago, targetOf, undoable as undoableCommit, openMenu, closeMenu, readKey, setShowInMenuBar, setMenuBarOnly, STORE_KEY, TRAY_KEY } from './ui.js';
 
 const tauri = window.__TAURI__;
 
@@ -1254,22 +1254,6 @@ function applyTheme() {
 
 // Shared with the tray window, which has the same switch.
 const trayPrefs = () => readKey(TRAY_KEY);
-function writeTrayPrefs(patch) {
-  try {
-    localStorage.setItem(TRAY_KEY, JSON.stringify({ ...trayPrefs(), ...patch }));
-  } catch {}
-}
-function setShowInMenuBar(visible) {
-  writeTrayPrefs({ showInMenuBar: visible });
-  tauri.core.invoke('set_tray_visible', { visible }).catch(() => {});
-  // Without the icon there'd be no way back to a hidden app.
-  if (!visible && trayPrefs().menuBarOnly) setMenuBarOnly(false);
-}
-function setMenuBarOnly(enabled) {
-  if (enabled && !trayPrefs().showInMenuBar) setShowInMenuBar(true);
-  writeTrayPrefs({ menuBarOnly: enabled });
-  tauri.core.invoke('set_menu_bar_only', { enabled }).catch(() => {});
-}
 
 function settingsPopover() {
   openPopover($('#tb-settings'), (el) => {
@@ -2567,6 +2551,12 @@ function init() {
   $('#tb-repo').addEventListener('click', repoPopover);
   $('#tb-server').addEventListener('click', serverPopover);
   $('#tb-settings').addEventListener('click', settingsPopover);
+  // The menu bar window owns no settings of its own; the theme is stored here.
+  tauri.event?.listen('set-theme', (e) => {
+    store.theme = e.payload;
+    save();
+    applyTheme();
+  });
   $('#commit-opts-btn').addEventListener('click', commitOptionsMenu);
   $('#coauthor-btn').addEventListener('click', toggleCoAuthors);
   $('#ai-btn').addEventListener('click', generateMessage);

@@ -4,9 +4,11 @@
 
 import * as git from './git.js';
 import { icons, fileIcon } from './icons.js';
-import { h, ago, targetOf, undoable as undoableCommit, openMenu, readKey as read, STORE_KEY as MAIN_KEY, TRAY_KEY } from './ui.js';
+import { h, ago, targetOf, undoable as undoableCommit, openMenu, readKey as read, setShowInMenuBar, setMenuBarOnly, STORE_KEY as MAIN_KEY, TRAY_KEY } from './ui.js';
 
 const tauri = window.__TAURI__;
+// The window itself is transparent on macOS; the content draws the rounded panel.
+if (/Mac/.test(navigator.platform || navigator.userAgent)) document.documentElement.classList.add('rounded');
 const FILES_SHOWN = 8;
 
 // The main window changes these too, so always start from what's stored.
@@ -18,7 +20,7 @@ const writePrefs = (patch) => {
 };
 
 let main = read(MAIN_KEY); // servers, repos, theme, commit options — owned by the main window
-let prefs = read(TRAY_KEY); // repoId, pushAfterCommit, menuBarOnly
+let prefs = read(TRAY_KEY); // repoId, pushAfterCommit (+ showInMenuBar, menuBarOnly from the main window)
 
 // ---------------------------------------------------------------- SSH
 
@@ -62,7 +64,8 @@ async function execOn(server, script, timeoutSecs = 60) {
 
 // ---------------------------------------------------------------- state
 
-const T = { repo: null, server: null, status: null, head: null, error: null, busy: null, picking: false, gen: 0, description: '' };
+// picking: false | 'repo' | 'branch' | 'settings' — what replaces the changes.
+const T = { repo: null, server: null, status: null, head: null, error: null, busy: null, picking: false, branches: null, gen: 0, description: '' };
 const ex = (script, t) => execOn(T.server, script, t);
 
 function selectRepo(id) {
@@ -187,11 +190,11 @@ function render() {
     h(
       'button',
       {
-        class: 'tray-repo' + (T.picking ? ' open' : ''),
+        class: 'tray-repo' + (T.picking === 'repo' ? ' open' : ''),
         type: 'button',
         disabled: !repos.length,
         onclick: () => {
-          T.picking = !T.picking;
+          T.picking = T.picking === 'repo' ? false : 'repo';
           render();
           // Check every server so the list shows which ones are reachable.
           if (T.picking) for (const s of servers) connect(s).catch(() => {});
@@ -210,7 +213,7 @@ function render() {
   );
 
   const parts = [head];
-  if (T.picking) {
+  if (T.picking === 'repo') {
     parts.push(
       h(
         'div',
@@ -236,6 +239,10 @@ function render() {
     parts.push(h('div', { class: 'tray-error' }, h('b', {}, `Can’t reach ${T.server?.name || 'the server'}`), h('div', { class: 'error-box' }, T.error), h('button', { class: 'btn', type: 'button', onclick: () => { connections.delete(T.server.id); T.error = null; refresh(); } }, 'Try again')));
   } else if (!T.status) {
     parts.push(h('div', { class: 'tray-clean' }, T.busy ? `${T.busy}…` : 'Loading…'));
+  } else if (T.picking === 'settings') {
+    parts.push(settingsPanel());
+  } else if (T.picking === 'branch') {
+    parts.push(branchRow(), branchPicker());
   } else {
     parts.push(...statusParts());
   }
@@ -244,12 +251,8 @@ function render() {
     h(
       'div',
       { class: 'tray-foot' },
-      h(
-        'label',
-        { class: 'check', title: 'Hide RemoteGit from the Dock / taskbar and keep it here' },
-        h('input', { type: 'checkbox', checked: !!prefs.menuBarOnly, onchange: (e) => setMenuBarOnly(e.target.checked) }),
-        /Mac/.test(navigator.platform || navigator.userAgent) ? 'Hide from the Dock' : 'Hide from the taskbar',
-      ),
+      h('button', { class: 'btn-icon' + (T.picking === 'settings' ? ' on' : ''), type: 'button', title: 'Settings', html: icons.gear, onclick: () => { T.picking = T.picking === 'settings' ? false : 'settings'; render(); } }),
+      h('span', { class: 'grow' }),
       h('button', { class: 'btn btn-sm', type: 'button', onclick: openMain }, 'Open RemoteGit'),
     ),
   );
@@ -267,29 +270,128 @@ function render() {
   }
 }
 
-function statusParts() {
+function branchRow() {
   const st = T.status;
   const action = syncAction();
+  const open = T.picking === 'branch';
+  return h(
+    'div',
+    { class: 'tray-branch' },
+    h(
+      'button',
+      { class: 'tray-branch-btn' + (open ? ' open' : ''), type: 'button', disabled: !!T.busy, title: 'Switch branch', onclick: toggleBranches },
+      h('span', { html: icons.branch }),
+      h('span', { class: 'name' }, st.branch.head || `Detached at ${st.branch.oid?.slice(0, 7)}`),
+      h('span', { html: icons.caret }),
+    ),
+    action &&
+      !open &&
+      h(
+        'button',
+        { class: 'btn', type: 'button', disabled: !!T.busy, title: `Last fetched ${ago(st.lastFetched)}`, onclick: () => busy(action.label, action.run) },
+        action.label,
+        action.count ? h('span', { class: 'count' }, String(action.count), h('span', { html: icons[action.icon] })) : '',
+      ),
+  );
+}
+
+async function toggleBranches() {
+  if (T.picking === 'branch') {
+    T.picking = false;
+    return render();
+  }
+  T.picking = 'branch';
+  T.branches = null;
+  render();
+  const repo = T.repo;
+  try {
+    const b = await git.getBranches(ex, repo.path);
+    if (T.repo === repo && T.picking === 'branch') T.branches = b;
+  } catch (e) {
+    T.branches = { error: e.message };
+  }
+  render();
+}
+
+function branchPicker() {
+  const B = T.branches;
+  if (!B) return h('div', { class: 'tray-picker' }, h('div', { class: 'pop-empty' }, 'Loading branches…'));
+  if (B.error) return h('div', { class: 'tray-picker' }, h('div', { class: 'tray-error' }, h('div', { class: 'error-box' }, B.error)));
+  const current = T.status.branch.head;
+  const byName = new Map(B.local.map((b) => [b.name, b]));
+  const shown = new Set();
+  const item = (name, time, remote) =>
+    h(
+      'div',
+      { class: 'pop-item' + (name === current ? ' current' : ''), onclick: (e) => pickBranch(e, name, remote) },
+      h('span', { html: name === current ? icons.check : icons.branch }),
+      h('div', { class: 'grow' }, h('div', { class: 'title' }, name)),
+      time && h('span', { class: 'sub' }, ago(time)),
+    );
+  const section = (title, list) => {
+    list = list.filter((b) => b && !shown.has(b.name));
+    list.forEach((b) => shown.add(b.name));
+    return list.length ? [h('div', { class: 'pop-group' }, title), list.map((b) => item(b.name, b.time, false))] : [];
+  };
+  const remote = B.remote.filter((b) => !byName.has(b.name.slice(b.name.indexOf('/') + 1)));
+  return h(
+    'div',
+    { class: 'tray-picker' },
+    section('Default Branch', [byName.get(B.defaultBranch)]),
+    section('Recent Branches', B.recent.map((n) => byName.get(n))),
+    section('Other Branches', B.local),
+    remote.length ? [h('div', { class: 'pop-group' }, 'Remote Branches'), remote.map((b) => item(b.name, b.time, true))] : [],
+  );
+}
+
+// With changes, asks like the main window: stash them here or take them along.
+function pickBranch(e, name, remote) {
+  const st = T.status;
+  if (!remote && name === st.branch.head) {
+    T.picking = false;
+    return render();
+  }
+  const go = () => (remote ? git.checkoutRemoteBranch(ex, T.repo.path, name) : git.checkoutBranch(ex, T.repo.path, name));
+  const run = (fn) => {
+    T.picking = false;
+    busy('Switching branch', fn);
+  };
+  if (!st.files.length || !st.branch.head) return run(go);
+  const target = remote ? name.slice(name.indexOf('/') + 1) : name;
+  const from = st.branch.head;
+  openMenu(e.clientX, e.clientY, [
+    { label: `${st.files.length} changed file${st.files.length === 1 ? '' : 's'} on ${from}:`, disabled: true },
+    {
+      label: `Leave them on ${from} (stash)`,
+      run: () =>
+        run(async () => {
+          if (st.stash) await git.dropStash(ex, T.repo.path, st.stash.sha);
+          await git.stashChanges(ex, T.repo.path, from);
+          await go();
+        }),
+    },
+    { label: `Bring them to ${target}`, run: () => run(go) },
+  ]);
+}
+
+function statusParts() {
+  const st = T.status;
   const files = st.files;
   const out = [];
 
-  out.push(
-    h(
-      'div',
-      { class: 'tray-branch' },
-      h('span', { html: icons.branch }),
-      h('span', { class: 'name', title: st.branch.head || '' }, st.branch.head || `Detached at ${st.branch.oid?.slice(0, 7)}`),
-      action &&
-        h(
-          'button',
-          { class: 'btn', type: 'button', disabled: !!T.busy, title: `Last fetched ${ago(st.lastFetched)}`, onclick: () => busy(action.label, action.run) },
-          action.label,
-          action.count ? h('span', { class: 'count' }, String(action.count), h('span', { html: icons[action.icon] })) : '',
-        ),
-    ),
-  );
+  out.push(branchRow());
 
   if (T.error) out.push(h('div', { class: 'banner' }, T.error));
+  if (st.stash)
+    out.push(
+      h(
+        'div',
+        { class: 'tray-stash' },
+        h('span', { html: icons.stack }),
+        h('span', { class: 'grow' }, 'Stashed changes', h('span', { class: 'sub' }, ` · ${ago(st.stash.time)}`)),
+        h('button', { class: 'btn btn-sm', type: 'button', disabled: !!T.busy, onclick: () => busy('Restoring stash', () => git.restoreStash(ex, T.repo.path, st.stash.sha)) }, 'Restore'),
+      ),
+    );
 
   if (!files.length) {
     out.push(h('div', { class: 'tray-files' }, h('div', { class: 'tray-clean' }, h('b', {}, 'No local changes'), T.busy ? `${T.busy}…` : 'Everything on the server is committed.')));
@@ -372,13 +474,51 @@ function hide() {
   } catch {}
 }
 
-function setMenuBarOnly(enabled) {
-  writePrefs({ menuBarOnly: enabled });
-  tauri.core.invoke('set_menu_bar_only', { enabled }).catch(() => {});
+// Same switches as the main window's settings. The theme lives in the main
+// window's store, so it is sent there instead of written from here.
+let themeChoice = null;
+let version = '';
+tauri.app?.getVersion().then((v) => (version = v), () => {});
+
+function settingsPanel() {
+  const isMac = /Mac/.test(navigator.platform || navigator.userAgent);
+  const theme = themeChoice || main.theme || 'system';
+  const pickTheme = (v) => {
+    themeChoice = v;
+    tauri.event?.emit('set-theme', v).catch(() => {});
+    applyTheme();
+    render();
+  };
+  return h(
+    'div',
+    { class: 'tray-picker' },
+    h(
+      'div',
+      { class: 'settings' },
+      h('div', { class: 'settings-label' }, 'Appearance'),
+      h('div', { class: 'segmented' }, [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([v, label]) => h('button', { type: 'button', class: v === theme ? 'active' : '', onclick: () => pickTheme(v) }, label))),
+      h('div', { class: 'settings-label' }, isMac ? 'Menu bar' : 'System tray'),
+      h(
+        'label',
+        { class: 'check settings-check' },
+        h('input', { type: 'checkbox', checked: !!prefs.showInMenuBar, onchange: (e) => { setShowInMenuBar(e.target.checked); render(); } }),
+        h('span', {}, h('b', {}, isMac ? 'Show in menu bar' : 'Show in system tray'), h('br'), h('span', { class: 'hint' }, 'Turning it off closes this window; turn it back on in the main window.')),
+      ),
+      h(
+        'label',
+        { class: 'check settings-check' },
+        h('input', { type: 'checkbox', checked: !!prefs.menuBarOnly, onchange: (e) => { setMenuBarOnly(e.target.checked); render(); } }),
+        h('span', {}, h('b', {}, isMac ? 'Hide from the Dock' : 'Hide from the taskbar'), h('br'), h('span', { class: 'hint' }, 'Closing the main window keeps RemoteGit running here.')),
+      ),
+      version && h('div', { class: 'settings-version' }, h('span', {}, `RemoteGit ${version}`), h('span', {}, 'Updates are checked automatically')),
+    ),
+  );
 }
 
 function applyTheme() {
-  const t = read(MAIN_KEY).theme || 'system';
+  const stored = read(MAIN_KEY).theme || 'system';
+  if (themeChoice === stored) themeChoice = null;
+  const t = themeChoice || stored;
   if (t === 'system') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = t;
 }

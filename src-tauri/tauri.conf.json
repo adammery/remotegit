@@ -28,12 +28,14 @@
         "resizable": false,
         "skipTaskbar": true,
         "alwaysOnTop": true,
-        "focus": true
+        "focus": true,
+        "transparent": true
       }
     ],
     "security": {
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.githubusercontent.com"
-    }
+    },
+    "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,

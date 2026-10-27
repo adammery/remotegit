@@ -3,6 +3,8 @@
 export const STORE_KEY = 'remotegit:v1'; // servers, repos, theme, commit options — owned by the main window
 export const TRAY_KEY = 'remotegit:tray'; // menu bar window preferences
 
+const tauri = window.__TAURI__;
+
 /** A stored JSON object, or {} when it's missing or storage is unavailable. */
 export function readKey(key) {
   try {
@@ -40,6 +42,25 @@ export function ago(sec) {
   for (const u of units) if (s >= u[0]) [div, name] = u;
   const n = Math.max(1, Math.round(s / div));
   return `${n} ${name}${n > 1 ? 's' : ''} ago`;
+}
+
+export function writeTrayPrefs(patch) {
+  try {
+    localStorage.setItem(TRAY_KEY, JSON.stringify({ ...readKey(TRAY_KEY), ...patch }));
+  } catch {}
+}
+
+// The two menu bar switches, settable from either window.
+export function setShowInMenuBar(visible) {
+  writeTrayPrefs({ showInMenuBar: visible });
+  tauri?.core.invoke('set_tray_visible', { visible }).catch(() => {});
+  // Without the icon there'd be no way back to a hidden app.
+  if (!visible && readKey(TRAY_KEY).menuBarOnly) setMenuBarOnly(false);
+}
+export function setMenuBarOnly(enabled) {
+  if (enabled && !readKey(TRAY_KEY).showInMenuBar) setShowInMenuBar(true);
+  writeTrayPrefs({ menuBarOnly: enabled });
+  tauri?.core.invoke('set_menu_bar_only', { enabled }).catch(() => {});
 }
 
 /** What the Rust side needs to open a connection to `server`. */

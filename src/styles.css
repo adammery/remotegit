@@ -392,7 +392,6 @@ input[type="checkbox"]:focus-visible { box-shadow: 0 0 0 3px rgba(68, 147, 248, 
 .btn-primary:hover:not(:disabled) { background: var(--primary-hover); filter: none; }
 .btn-danger { background: var(--danger); border-color: transparent; color: #fff; }
 .btn-block { width: 100%; }
-.btn-link { border: 0; background: none; color: var(--accent); padding: 0; height: auto; }
 .btn-icon { display: inline-grid; place-items: center; flex: none; width: 24px; height: 24px; padding: 0; border: 0; background: transparent; color: var(--muted); border-radius: 4px; }
 .btn-icon:hover { background: var(--hover); color: var(--text); }
 .btn-sm { height: 24px; padding: 0 8px; font-size: 11px; }

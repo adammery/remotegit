@@ -25,6 +25,10 @@ const GIT =
 
 const inRepo = (repo, body) => `cd ${qpath(repo)} || exit 128\n${body}`;
 
+// The GitHub CLI, also when it's installed in ~/.local/bin; exit 127 without it.
+const GH = 'GH_PROMPT_DISABLED=1 NO_COLOR=1 gh';
+const ghPath = 'PATH="$HOME/.local/bin:/usr/local/bin:$PATH"\ncommand -v gh >/dev/null 2>&1 || exit 127';
+
 export class GitError extends Error {}
 
 function must(r) {
@@ -502,17 +506,17 @@ export async function getPullRequests(exec, repo) {
   const r = await exec(
     inRepo(
       repo,
-      `command -v gh >/dev/null 2>&1 || exit 127
-GH_PROMPT_DISABLED=1 NO_COLOR=1 gh pr list --state open --limit 100 --json number,title,headRefName,author,updatedAt,isDraft,url`,
+      `${ghPath}
+${GH} pr list --state open --limit 100 --json number,title,headRefName,author,updatedAt,isDraft,url,statusCheckRollup`,
     ),
     60,
   );
   if (r.code === 127) return null;
-  return JSON.parse(must(r) || '[]');
+  return JSON.parse(must(r) || '[]').map((p) => ({ ...p, checks: rollupState(p.statusCheckRollup || []) }));
 }
 
 export const checkoutPullRequest = (exec, repo, number) =>
-  run(exec, inRepo(repo, `GH_PROMPT_DISABLED=1 gh pr checkout ${Number(number)}`), NET_TIMEOUT);
+  run(exec, inRepo(repo, `${ghPath}\n${GH} pr checkout ${Number(number)}`), NET_TIMEOUT);
 
 export const createBranch = (exec, repo, name) => run(exec, inRepo(repo, `${GIT} switch -q -c ${q(name)}`), 60);
 
@@ -659,31 +663,20 @@ for t in ${AI_TOOLS.map((t) => t.id).join(' ')}; do command -v "$t" >/dev/null 2
 }
 
 /**
- * Asks `tool` ('claude' or 'codex') on the server for a commit message for
- * `files`, in the style of the recent history. Returns null when it isn't
- * installed.
+ * Runs `tool` ('claude' or 'codex') on the server with `prompt` (a shell
+ * expression) and the output of `input` (shell commands) on stdin. The reply is
+ * split into its first line and the rest; null when the tool isn't installed.
  */
-export async function generateCommitMessage(exec, repo, files, hasHead, tool) {
-  const tracked = files.filter((f) => hasHead && f.xy !== '??');
-  const untracked = files.filter((f) => !hasHead || f.xy === '??').slice(0, 30);
-  const diffs = [
-    tracked.length &&
-      `${GIT} diff HEAD --no-color --no-ext-diff -M -- ${tracked.flatMap((f) => (f.orig ? [f.orig, f.path] : [f.path])).map(q).join(' ')}`,
-    ...untracked.map((f) => `${GIT} diff --no-index --no-color --no-ext-diff -- /dev/null ${q(f.path)}`),
-  ].filter(Boolean);
-  const intro =
-    'Write a git commit message for the diff on stdin. Use only that diff, do not run commands. Match the style (language, casing, prefixes) of these recent commit subjects:';
-  const outro =
-    'Reply with only the message: a summary line under 72 characters, then optionally a blank line and a short body. No quotes, no code fences.';
+async function askAi(exec, repo, tool, { setup = '', prompt, input }) {
   const r = await exec(
     inRepo(
       repo,
       `${AI_PATH}
 ai=${q(tool)}
 command -v "$ai" >/dev/null 2>&1 || exit 127
-recent=$(${GIT} log -n 15 --format=%s 2>/dev/null)
-prompt=$(printf '%s\n%s\n\n%s' ${q(intro)} "$recent" ${q(outro)})
-changes() { { ${diffs.map((d) => `${d};`).join(' ') || 'true;'} } | head -c 120000; }
+${setup}
+prompt=${prompt}
+changes() { { ${input} } | head -c 120000; }
 if [ "$ai" = claude ]; then
   changes | claude -p "$prompt"
   exit
@@ -707,6 +700,39 @@ exit $rc`,
     .trim();
   const [summary, ...rest] = text.split('\n');
   return { summary: summary.trim(), description: rest.join('\n').trim() };
+}
+
+/**
+ * A commit message for `files` in the style of the recent history, from `tool`
+ * on the server. Returns null when it isn't installed.
+ */
+export function generateCommitMessage(exec, repo, files, hasHead, tool) {
+  const tracked = files.filter((f) => hasHead && f.xy !== '??');
+  const untracked = files.filter((f) => !hasHead || f.xy === '??').slice(0, 30);
+  const diffs = [
+    tracked.length &&
+      `${GIT} diff HEAD --no-color --no-ext-diff -M -- ${tracked.flatMap((f) => (f.orig ? [f.orig, f.path] : [f.path])).map(q).join(' ')}`,
+    ...untracked.map((f) => `${GIT} diff --no-index --no-color --no-ext-diff -- /dev/null ${q(f.path)}`),
+  ].filter(Boolean);
+  const intro =
+    'Write a git commit message for the diff on stdin. Use only that diff, do not run commands. Match the style (language, casing, prefixes) of these recent commit subjects:';
+  const outro =
+    'Reply with only the message: a summary line under 72 characters, then optionally a blank line and a short body. No quotes, no code fences.';
+  return askAi(exec, repo, tool, {
+    setup: `recent=$(${GIT} log -n 15 --format=%s 2>/dev/null)`,
+    prompt: `$(printf '%s\n%s\n\n%s' ${q(intro)} "$recent" ${q(outro)})`,
+    input: diffs.map((d) => `${d};`).join(' ') || 'true;',
+  });
+}
+
+/** A pull request title and description for HEAD against `base` (e.g. origin/main). */
+export function generatePullRequest(exec, repo, base, tool) {
+  const prompt =
+    'Write a GitHub pull request title and description for the commits and diff on stdin. Use only that input, do not run commands. Reply with only: the title on the first line (under 72 characters), a blank line, then a short Markdown description of what changes and why. No code fences around the reply.';
+  return askAi(exec, repo, tool, {
+    prompt: q(prompt),
+    input: `${GIT} log --format='- %s' ${q(base + '..HEAD')}; echo; ${GIT} diff --no-color --no-ext-diff -M ${q(base + '...HEAD')};`,
+  });
 }
 
 /** Your GitHub repositories via `gh`, newest first; null without `gh`. */
@@ -809,6 +835,110 @@ export const ignorePath = (exec, repo, path) =>
 printf '%s\\n' ${q('/' + path)} >> .gitignore`,
     ),
   );
+
+// ------------------------------------------------------ CI and pull requests
+
+/** 'success' | 'failure' | 'pending' | null for a list of checks. */
+export function checksState(checks) {
+  if (!checks.length) return null;
+  if (checks.some((c) => c.state === 'failure')) return 'failure';
+  if (checks.some((c) => c.state === 'pending')) return 'pending';
+  return 'success';
+}
+
+const checkState = (status, conclusion) => {
+  if (status && status.toLowerCase() !== 'completed') return 'pending';
+  const c = (conclusion || '').toLowerCase();
+  if (['failure', 'timed_out', 'action_required', 'startup_failure', 'error', 'cancelled'].includes(c)) return 'failure';
+  if (['', 'pending', 'expected', 'queued', 'in_progress', 'waiting'].includes(c)) return 'pending';
+  return 'success'; // success, neutral, skipped
+};
+
+// statusCheckRollup mixes check runs (status/conclusion) and commit statuses (state).
+const rollupState = (rollup) =>
+  checksState(rollup.map((c) => ({ state: c.__typename === 'StatusContext' ? checkState('completed', c.state) : checkState(c.status, c.conclusion) })));
+
+/**
+ * GitHub Actions runs and commit statuses for `sha`, via `gh`. null without
+ * `gh` or when the repository isn't on GitHub; [] when the commit has none.
+ */
+export async function getChecks(exec, repo, sha) {
+  const r = await exec(
+    inRepo(
+      repo,
+      `${ghPath}
+${GH} api ${q(`repos/{owner}/{repo}/commits/${sha}/check-runs?per_page=100`)} --jq '.check_runs[] | [.name, .status, (.conclusion // ""), .html_url] | @tsv' || exit 3
+${PRINT_SEP}
+${GH} api ${q(`repos/{owner}/{repo}/commits/${sha}/status`)} --jq '.statuses[] | [.context, .state, (.target_url // "")] | @tsv'
+true`,
+    ),
+    30,
+  );
+  if (r.code !== 0) return null;
+  const [runs, statuses = ''] = r.stdout.split(SEP);
+  const rows = (s) => s.split('\n').filter(Boolean).map((l) => l.split('\t'));
+  return [
+    ...rows(runs).map(([name, status, conclusion, url]) => ({ name, state: checkState(status, conclusion), detail: conclusion || status.replace('_', ' '), url })),
+    ...rows(statuses).map(([name, state, url]) => ({ name, state: checkState('completed', state), detail: state, url })),
+  ];
+}
+
+/** Summaries of the commits in `range` (e.g. origin/main..HEAD), newest first. */
+export async function commitSummaries(exec, repo, range) {
+  const r = await exec(inRepo(repo, `${GIT} log --format=%s ${q(range)} --`));
+  return r.code === 0 ? r.stdout.split('\n').filter(Boolean) : [];
+}
+
+/** The open pull request for the current branch, or null. */
+export async function getBranchPullRequest(exec, repo) {
+  const r = await exec(inRepo(repo, `${ghPath}\n${GH} pr view --json number,title,url,state,isDraft,baseRefName`), 30);
+  if (r.code !== 0) return null;
+  const pr = JSON.parse(r.stdout || 'null');
+  return pr && pr.state === 'OPEN' ? pr : null;
+}
+
+/** Opens a pull request for the current (pushed) branch; returns its URL. */
+export async function createPullRequest(exec, repo, { base, title, body, draft }) {
+  const out = await run(
+    exec,
+    inRepo(repo, `${ghPath}\n${GH} pr create --base ${q(base)} --title ${q(title)} --body ${q(body || '')}${draft ? ' --draft' : ''}`),
+    NET_TIMEOUT,
+  );
+  return out.trim().split('\n').pop();
+}
+
+// ---------------------------------------------------------------- images
+
+const IMAGE_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif' };
+export const IMAGE_LIMIT = 10_000_000;
+
+/** MIME type when `path` is an image the diff view can show, else null. */
+export const imageType = (path) => IMAGE_TYPES[(/\.([^./]+)$/.exec(path || '')?.[1] || '').toLowerCase()] || null;
+
+/**
+ * Both versions of an image as base64. Each side is { rev, path } for a blob
+ * in git, { worktree: path } for the file on disk, or null when it doesn't
+ * exist. A side comes back as null (missing), { size } (too large) or
+ * { size, base64 }.
+ */
+export async function getImageVersions(exec, repo, before, after) {
+  const side = (s) => {
+    if (!s) return 'echo none';
+    if (s.worktree)
+      return `if [ -f ${q(s.worktree)} ]; then s=$(wc -c < ${q(s.worktree)} | tr -d ' '); echo "$s"; [ "$s" -le ${IMAGE_LIMIT} ] && base64 < ${q(s.worktree)}; else echo none; fi`;
+    const spec = q(`${s.rev}:${s.path}`);
+    return `if s=$(${GIT} cat-file -s ${spec} 2>/dev/null); then echo "$s"; [ "$s" -le ${IMAGE_LIMIT} ] && ${GIT} cat-file blob ${spec} | base64; else echo none; fi`;
+  };
+  const out = await run(exec, inRepo(repo, `${side(before)}\n${PRINT_SEP}\n${side(after)}\ntrue`), 120);
+  const parse = (text) => {
+    const [first, ...rest] = text.trim().split('\n');
+    if (!first || first === 'none') return null;
+    const size = Number(first);
+    return size > IMAGE_LIMIT ? { size } : { size, base64: rest.join('').replace(/\s+/g, '') };
+  };
+  const [a, b = ''] = out.split(SEP);
+  return { before: parse(a), after: parse(b) };
+}
 
 // ---------------------------------------------------------------- misc
 

@@ -532,3 +532,73 @@ test('cloneRepo clones a URL and refuses an existing folder', async () => {
   assert.equal(sh(target, 'git log --format=%s').trim(), 'init');
   await assert.rejects(git.cloneRepo(exec, src, target), /already exists/);
 });
+
+test('image versions from git and the working tree', async () => {
+  const dir = newRepo();
+  const png1 = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  const png2 = Buffer.concat([png1, Buffer.from('extra')]);
+  writeFileSync(join(dir, 'logo.png'), png1);
+  sh(dir, 'git add -A && git commit -qm "Add logo"');
+  writeFileSync(join(dir, 'logo.png'), png2);
+  assert.equal(git.imageType('a/Logo.PNG'), 'image/png');
+  assert.equal(git.imageType('a.svg'), null);
+  const v = await git.getImageVersions(exec, dir, { rev: 'HEAD', path: 'logo.png' }, { worktree: 'logo.png' });
+  assert.deepEqual(Buffer.from(v.before.base64, 'base64'), png1);
+  assert.deepEqual(Buffer.from(v.after.base64, 'base64'), png2);
+  assert.equal(v.after.size, png2.length);
+  // An added image has no "before" (HEAD~1 doesn't exist here).
+  const added = await git.getImageVersions(exec, dir, { rev: 'HEAD~1', path: 'logo.png' }, { rev: 'HEAD', path: 'logo.png' });
+  assert.equal(added.before, null);
+  assert.deepEqual(Buffer.from(added.after.base64, 'base64'), png1);
+  const none = await git.getImageVersions(exec, dir, null, { rev: 'HEAD', path: 'missing.png' });
+  assert.deepEqual(none, { before: null, after: null });
+});
+
+test('checks, branch pull request and creating one via a fake gh', async () => {
+  const dir = newRepo();
+  sh(dir, 'git commit -q --allow-empty -m init');
+  const bin = join(root, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(
+    join(bin, 'gh'),
+    `#!/bin/sh
+case "$1 $2" in
+  "api repos/{owner}/{repo}/commits/abc/check-runs?per_page=100") printf 'build\\tcompleted\\tsuccess\\thttps://x/1\\ntest\\tin_progress\\t\\thttps://x/2\\n' ;;
+  "api repos/{owner}/{repo}/commits/abc/status") printf 'ci/legacy\\tfailure\\thttps://x/3\\n' ;;
+  "api "*) echo 'Not Found' >&2; exit 1 ;;
+  "pr view") echo '{"number":7,"title":"Feature","url":"https://github.com/a/b/pull/7","state":"OPEN","isDraft":false,"baseRefName":"main"}' ;;
+  "pr create") printf '%s\\n' "$@" > ${root}/gh-create; echo 'https://github.com/a/b/pull/8' ;;
+esac
+`,
+    { mode: 0o755 },
+  );
+  const checks = await git.getChecks(exec, dir, 'abc');
+  assert.deepEqual(checks.map((c) => [c.name, c.state]), [['build', 'success'], ['test', 'pending'], ['ci/legacy', 'failure']]);
+  assert.equal(git.checksState(checks), 'failure');
+  assert.equal(git.checksState(checks.slice(0, 2)), 'pending');
+  assert.equal(git.checksState([]), null);
+  assert.equal(await git.getChecks(exec, dir, 'nope'), null);
+  assert.equal((await git.getBranchPullRequest(exec, dir)).number, 7);
+  const url = await git.createPullRequest(exec, dir, { base: 'main', title: `It's "new"`, body: 'Body $HOME', draft: true });
+  assert.equal(url, 'https://github.com/a/b/pull/8');
+  assert.deepEqual(readFileSync(join(root, 'gh-create'), 'utf8').trim().split('\n'), ['pr', 'create', '--base', 'main', '--title', `It's "new"`, '--body', 'Body $HOME', '--draft']);
+  rmSync(join(bin, 'gh'));
+  assert.equal(await git.getChecks(exec, dir, 'abc'), null); // no gh
+});
+
+test('generatePullRequest sends the commits and diff to the AI', async () => {
+  const dir = newRepo();
+  writeFileSync(join(dir, 'a.txt'), 'one\n');
+  sh(dir, 'git add -A && git commit -qm init && git switch -q -c feature');
+  writeFileSync(join(dir, 'a.txt'), 'two\n');
+  sh(dir, 'git commit -qam "Change a"');
+  const bin = join(root, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, 'claude'), `#!/bin/sh\ncat > ${root}/pr-input\nprintf 'Change a to two\\n\\nIt now says two.\\n'\n`, { mode: 0o755 });
+  const pr = await git.generatePullRequest(exec, dir, 'main', 'claude');
+  assert.deepEqual(pr, { summary: 'Change a to two', description: 'It now says two.' });
+  const input = readFileSync(join(root, 'pr-input'), 'utf8');
+  assert.match(input, /- Change a/);
+  assert.match(input, /-one\n\+two/);
+  rmSync(join(bin, 'claude'));
+});

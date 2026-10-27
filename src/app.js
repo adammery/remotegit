@@ -167,6 +167,8 @@ const S = {
   commitFile: null,
   commitDiff: null,
   stashView: null, // { sha, files, file, diff } while the branch's stash is open
+  remote: { at: 0, sha: null, checks: null, pr: null, branch: null, defaultBranch: null }, // CI and PR of HEAD, from gh
+  commitChecks: null, // { sha, checks } for the commit open in History
 };
 const ex = (script, timeout) => execOn(S.server, script, timeout);
 const hasHead = () => !!S.status?.branch.oid;
@@ -193,6 +195,8 @@ function selectRepo(repoId) {
     commitFile: null,
     commitDiff: null,
     stashView: null,
+    remote: { at: 0, sha: null, checks: null, pr: null, branch: null, defaultBranch: null },
+    commitChecks: null,
   });
   if (repo && !S.server) S.repo = null;
   if (S.repo && store.serverFilter && S.repo.serverId !== store.serverFilter) store.serverFilter = S.repo.serverId;
@@ -238,6 +242,8 @@ async function refresh() {
     }
     if (headMoved && S.tab === 'history') loadHistory(true);
     if (headMoved) loadHeadCommit();
+    const pushed = prev && (prev.branch.upstream !== st.branch.upstream || prev.branch.ahead !== st.branch.ahead);
+    loadRemoteInfo(headMoved || pushed);
     loadGitHubUser(S.server);
     if (S.tab === 'changes' && !S.stashView) await refreshDiff();
   } catch (e) {
@@ -339,6 +345,7 @@ async function selectCommit(sha) {
     S.commit = c;
     S.commitFile = c.files[0] || null;
     renderContent();
+    loadCommitChecks(c.sha);
     if (S.commitFile) await loadCommitDiff();
   } catch (e) {
     if (gen === S.gen) toast(e.message, 'error', 'Could not load commit');
@@ -647,6 +654,7 @@ function renderToolbar() {
 
   const branchBtn = $('#tb-branch');
   branchBtn.disabled = !st;
+  renderCiBadge();
   $('#tb-branch-name').textContent = !st ? '—' : st.branch.head || `Detached at ${st.branch.oid?.slice(0, 7) || '?'}`;
 
   const syncBtn = $('#tb-sync');
@@ -855,7 +863,10 @@ function contentView() {
   if (!file) return noChangesView();
   return [
     h('div', { class: 'diff-header' }, h('span', { class: `file-status ${file.kind}`, html: fileIcon(file.kind) }), h('span', { class: 'path' }, ltr(file.orig ? `${file.orig} → ${file.path}` : file.path))),
-    diffView(S.diff, file),
+    diffView(S.diff, file, file.path, {
+      before: hasHead() && file.xy !== '??' && file.xy[0] !== 'A' ? { rev: 'HEAD', path: file.orig || file.path } : null,
+      after: file.kind === 'deleted' ? null : { worktree: file.path },
+    }),
   ];
 }
 
@@ -922,6 +933,11 @@ function noChangesView() {
     cards.push(card({ highlight: true, primary: true, title: `Pull ${st.branch.behind} commit${st.branch.behind > 1 ? 's' : ''} from ${st.remote.name}`, sub: 'The remote branch has commits you don’t have yet.', button: `Pull ${st.remote.name}`, onclick: () => runSync(action) }));
   if (action?.kind === 'publish')
     cards.push(card({ highlight: true, primary: true, title: 'Publish your branch', sub: `“${st.branch.head}” doesn’t exist on ${st.remote.name} yet.`, button: 'Publish branch', onclick: () => runSync(action) }));
+  const R = S.remote;
+  if (R.pr && R.branch === st.branch.head)
+    cards.push(card({ title: `Pull request #${R.pr.number}: ${R.pr.title}`, sub: `Open on GitHub${R.pr.isDraft ? ' (draft)' : ''}, into ${R.pr.baseRefName}.`, button: 'View Pull Request', onclick: () => openExternal(R.pr.url) }));
+  else if (canCreatePr())
+    cards.push(card({ title: 'Create a Pull Request from your current branch', sub: `Propose “${st.branch.head}” for merging into ${R.defaultBranch} on GitHub.`, button: 'Create Pull Request', onclick: () => createPrModal() }));
   cards.push(card({ title: 'Open the repository in Visual Studio Code', sub: S.server.local ? 'Opens the folder in VS Code.' : 'Opens on the server through the Remote - SSH extension.', button: 'Open in VS Code', onclick: () => openExternal(vscodeUrl()) }));
   if (S.server.local)
     cards.push(card({ title: `Show the repository in ${isMac ? 'Finder' : 'Explorer'}`, sub: S.repo.path, button: `Show in ${isMac ? 'Finder' : 'Explorer'}`, onclick: () => tauri.opener?.revealItemInDir(S.repo.path).catch((e) => toast(String(e), 'error')) }));
@@ -1054,10 +1070,12 @@ function highlightHunk(hk, lang) {
   return map;
 }
 
-function diffView(d, file, path = file?.path) {
+// `images`: where the two versions live, for showing an image side by side.
+function diffView(d, file, path = file?.path, images = null) {
   if (!d) return h('div', { class: 'diff' }, h('div', { class: 'diff-notice' }, 'Loading diff…'));
   if (d.error) return h('div', { class: 'diff' }, h('div', { class: 'diff-notice' }, h('div', { class: 'error-box' }, d.error)));
   const parsed = git.parseDiff(d.text);
+  if (parsed.binary && images && git.imageType(path)) return imageDiff(images, path, d.text);
   if (parsed.binary) return h('div', { class: 'diff' }, h('div', { class: 'diff-notice' }, 'This binary file has changed.'));
   if (!parsed.hunks.length)
     return h('div', { class: 'diff' }, h('div', { class: 'diff-notice' }, parsed.notes.length ? parsed.notes.join('\n') : 'No content changes (empty file).'));
@@ -1116,6 +1134,7 @@ function historyView() {
       h('span', { class: 'sha', title: 'Click to copy', style: 'cursor:pointer', onclick: () => copyText(c.sha) }, h('span', { html: icons.commit }), c.sha.slice(0, 7)),
       h('span', { title: new Date(c.time * 1000).toLocaleString() }, ago(c.time)),
       h('span', {}, `${c.files.length} changed file${c.files.length === 1 ? '' : 's'}`),
+      S.commitChecks?.sha === c.sha && S.commitChecks.checks?.length ? checksSummary(S.commitChecks.checks, c.sha) : '',
     ),
   );
   const files = h(
@@ -1135,7 +1154,7 @@ function historyView() {
       );
     }),
   );
-  const diffCol = h('div', { class: 'diff-col' }, S.commitFile ? diffView(S.commitDiff, null, S.commitFile.path) : h('div', { class: 'diff-notice' }, 'No file changes in this commit.'));
+  const diffCol = h('div', { class: 'diff-col' }, S.commitFile ? diffView(S.commitDiff, null, S.commitFile.path, commitImages(c, S.commitFile)) : h('div', { class: 'diff-notice' }, 'No file changes in this commit.'));
   return [head, h('div', { class: 'split' }, files, diffCol)];
 }
 
@@ -1308,6 +1327,7 @@ const SHORTCUTS = [
   ['Mod+B', 'Switch branch', () => branchPopover()],
   ['Mod+Shift+N', 'New branch', () => S.status && newBranchModal()],
   ['Mod+Shift+O', 'Clone repository', () => cloneModal()],
+  ['Mod+Shift+R', 'Create pull request', () => (S.remote.pr && S.remote.branch === S.status?.branch.head ? openExternal(S.remote.pr.url) : canCreatePr() && createPrModal())],
   ['Mod+Shift+S', 'Stash all changes', () => stashAll()],
   ['Mod+F', 'Filter files / search history', () => { const el = $(S.tab === 'history' ? '#history-filter' : '#filter'); el.focus(); el.select(); }],
   ['Mod+Shift+L', 'Switch server', () => serverPopover()],
@@ -1429,7 +1449,7 @@ function branchPopover(initialTab = 'branches') {
             h(
               'div',
               { class: 'grow' },
-              h('div', { class: 'title' }, p.title, p.isDraft && h('span', { class: 'tag-badge' }, 'Draft')),
+              h('div', { class: 'title' }, p.title, p.isDraft && h('span', { class: 'tag-badge' }, 'Draft'), p.checks && ciBadge(p.checks)),
               h('div', { class: 'sub' }, `#${p.number} opened by ${p.author?.login || 'someone'} • updated ${ago(Date.parse(p.updatedAt) / 1000)} • ${p.headRefName}`),
             ),
           ),
@@ -1683,7 +1703,10 @@ function stashView() {
       );
     }),
   );
-  const diffCol = h('div', { class: 'diff-col' }, V.file ? diffView(V.diff, null, V.file.path) : h('div', { class: 'diff-notice' }, V.files ? 'The stash has no file changes.' : 'Loading…'));
+  const diffCol = h('div', { class: 'diff-col' }, V.file ? diffView(V.diff, null, V.file.path, {
+          before: V.file.kind === 'new' ? null : { rev: V.sha + '^1', path: V.file.orig || V.file.path },
+          after: V.file.kind === 'deleted' ? null : { rev: V.file.untracked ? V.sha + '^3' : V.sha, path: V.file.path },
+        }) : h('div', { class: 'diff-notice' }, V.files ? 'The stash has no file changes.' : 'Loading…'));
   return [head, h('div', { class: 'split' }, files, diffCol)];
 }
 
@@ -1704,6 +1727,238 @@ function stashAll() {
     onConfirm: run,
   });
 }
+
+// ============================================================ CI and pull requests
+
+const ciLabel = { success: 'All checks have passed', failure: 'Some checks were not successful', pending: 'Checks are running' };
+
+function ciBadge(state) {
+  return h('span', { class: `ci-badge ${state}`, title: ciLabel[state], html: state === 'success' ? icons.check : state === 'failure' ? icons.x : '' });
+}
+
+function renderCiBadge() {
+  const el = $('#tb-ci');
+  const R = S.remote;
+  const state = R.sha && R.sha === S.status?.branch.oid ? git.checksState(R.checks || []) : null;
+  el.hidden = !state;
+  if (!state) return;
+  el.className = `ci-badge ${state}`;
+  el.title = `${ciLabel[state]} — click for details`;
+  el.innerHTML = state === 'success' ? icons.check : state === 'failure' ? icons.x : '';
+}
+
+/** "3 checks ✓" next to a commit, opening the list. */
+function checksSummary(checks, sha) {
+  const state = git.checksState(checks);
+  const el = h('span', { class: 'checks-summary', title: ciLabel[state], onclick: () => checksPopover(el, checks, sha) }, ciBadge(state), `${checks.length} check${checks.length === 1 ? '' : 's'}`);
+  return el;
+}
+
+function checksPopover(anchor, checks, sha) {
+  openPopover(anchor, (el) => {
+    const order = { failure: 0, pending: 1, success: 2 };
+    const sorted = [...checks].sort((a, b) => order[a.state] - order[b.state] || a.name.localeCompare(b.name));
+    el.append(
+      h('div', { class: 'pop-group' }, `${ciLabel[git.checksState(checks)]} · ${sha.slice(0, 7)}`),
+      h(
+        'div',
+        { class: 'pop-body' },
+        sorted.map((c) =>
+          h(
+            'div',
+            { class: 'pop-item', title: c.url || '', onclick: () => c.url && openExternal(c.url) },
+            ciBadge(c.state),
+            h('div', { class: 'grow' }, h('div', { class: 'title' }, c.name), h('div', { class: 'sub' }, c.detail)),
+            c.url && h('span', { html: icons.external }),
+          ),
+        ),
+      ),
+    );
+  }, 340);
+}
+
+// Checks of the branch tip and its pull request, from gh. Only for a pushed tip,
+// at most every 30 s while checks run and every 2 min otherwise (and only while
+// the window has focus, like the rest of the polling).
+let remoteInFlight = false;
+async function loadRemoteInfo(force) {
+  const st = S.status;
+  const R = S.remote;
+  if (!st || remoteInFlight) return;
+  const web = git.webUrl(st.remote?.url);
+  const onGitHub = !!web && new URL(web).hostname === 'github.com';
+  const pushed = !!st.branch.oid && !!st.branch.upstream && st.branch.ahead === 0;
+  const due = Date.now() - R.at > (git.checksState(R.checks || []) === 'pending' ? 30_000 : 120_000);
+  if (!onGitHub) return;
+  if (!force && !due && R.sha === st.branch.oid && R.branch === st.branch.head) return;
+  remoteInFlight = true;
+  const gen = S.gen;
+  try {
+    const [checks, pr, branches] = await Promise.all([
+      pushed ? git.getChecks(ex, S.repo.path, st.branch.oid) : null,
+      st.branch.head ? git.getBranchPullRequest(ex, S.repo.path) : null,
+      R.defaultBranch ? null : git.getBranches(ex, S.repo.path).catch(() => null),
+    ]);
+    if (gen !== S.gen) return;
+    Object.assign(R, { at: Date.now(), sha: st.branch.oid, checks, pr, branch: st.branch.head });
+    if (branches) R.defaultBranch = branches.defaultBranch;
+    renderToolbar();
+    if (S.tab === 'changes' && !currentFiles().length) renderContent();
+  } finally {
+    remoteInFlight = false;
+  }
+}
+
+async function loadCommitChecks(sha) {
+  S.commitChecks = null;
+  const web = git.webUrl(S.status?.remote?.url);
+  if (!web || new URL(web).hostname !== 'github.com') return;
+  const gen = S.gen;
+  const checks = await git.getChecks(ex, S.repo.path, sha).catch(() => null);
+  if (gen !== S.gen || S.selectedSha !== sha) return;
+  S.commitChecks = { sha, checks };
+  if (checks?.length && S.tab === 'history') renderContent();
+}
+
+function canCreatePr() {
+  const st = S.status;
+  const web = git.webUrl(st?.remote?.url);
+  return !!st?.branch.head && !!web && new URL(web).hostname === 'github.com' && !!S.remote.defaultBranch && st.branch.head !== S.remote.defaultBranch;
+}
+
+async function createPrModal() {
+  const st = S.status;
+  const remote = st.remote.name;
+  const branch = st.branch.head;
+  let bases = [S.remote.defaultBranch];
+  try {
+    const b = await git.getBranches(ex, S.repo.path);
+    bases = [...new Set([S.remote.defaultBranch, ...b.remote.filter((r) => r.name.startsWith(remote + '/')).map((r) => r.name.slice(remote.length + 1))])].filter((n) => n && n !== branch);
+  } catch {}
+  const base = h('select', {}, bases.map((n) => h('option', { value: n }, n)));
+  const title = h('input', { placeholder: 'Title', spellcheck: true });
+  const body = h('textarea', { placeholder: 'Description (Markdown)', rows: 8, spellcheck: true });
+  const draft = h('input', { type: 'checkbox' });
+  const error = h('div', { class: 'form-error' });
+  const aiBtn = h('button', { class: 'btn', type: 'button', title: 'Write the title and description with AI (on the server)', html: icons.sparkle });
+  const createBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Create pull request');
+  const unpushed = !st.branch.upstream ? 'The branch is published first.' : st.branch.ahead ? `Your ${st.branch.ahead} unpushed commit${st.branch.ahead > 1 ? 's are' : ' is'} pushed first.` : '';
+
+  // Default title like GitHub: the only commit's summary, or the branch name.
+  const fillTitle = async () => {
+    const summaries = await git.commitSummaries(ex, S.repo.path, `${remote}/${base.value}..HEAD`);
+    if (title.dataset.edited) return;
+    title.value = summaries.length === 1 ? summaries[0] : branch.replace(/[-_/]+/g, ' ').replace(/^./, (c) => c.toUpperCase());
+  };
+  title.addEventListener('input', () => (title.dataset.edited = '1'));
+  base.addEventListener('change', fillTitle);
+
+  aiBtn.addEventListener('click', async () => {
+    const tools = await git.findAiTools(ex).catch(() => []);
+    if (!tools.length) return (error.textContent = 'No AI found on the server. Install Claude Code or Codex there and sign in once.');
+    const write = async (tool) => {
+      aiBtn.disabled = true;
+      aiBtn.innerHTML = icons.spinner;
+      error.textContent = '';
+      try {
+        const m = await git.generatePullRequest(ex, S.repo.path, `${remote}/${base.value}`, tool);
+        if (m) {
+          title.value = m.summary;
+          title.dataset.edited = '1';
+          body.value = m.description;
+        }
+      } catch (e) {
+        error.textContent = e.message;
+      } finally {
+        aiBtn.disabled = false;
+        aiBtn.innerHTML = icons.sparkle;
+      }
+    };
+    if (tools.length === 1) return write(tools[0].id);
+    const r = aiBtn.getBoundingClientRect();
+    openMenu(r.left, r.bottom + 4, [{ label: 'Write it with', disabled: true }, ...tools.map((t) => ({ label: t.name, run: () => write(t.id) }))]);
+  });
+
+  const closeFn = openModal({
+    title: 'Create a pull request',
+    wide: true,
+    body: [
+      h('p', { class: 'hint', style: 'margin:0 0 10px' }, `From ${branch} on GitHub. ${unpushed}`),
+      field('Into', base),
+      h('label', { class: 'field' }, h('span', {}, 'Title'), h('div', { class: 'input-row' }, title, aiBtn)),
+      field('Description', body),
+      h('label', { class: 'check' }, draft, 'Create as a draft'),
+      error,
+    ],
+    foot: (close) => [h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'), createBtn],
+  });
+  createBtn.addEventListener('click', async () => {
+    if (!title.value.trim()) return (error.textContent = 'Give the pull request a title.');
+    createBtn.disabled = true;
+    createBtn.textContent = unpushed ? 'Pushing…' : 'Creating…';
+    error.textContent = '';
+    try {
+      if (!st.branch.upstream || st.branch.ahead) await git.push(ex, S.repo.path, { remote, hasUpstream: !!st.branch.upstream });
+      createBtn.textContent = 'Creating…';
+      const url = await git.createPullRequest(ex, S.repo.path, { base: base.value, title: title.value.trim(), body: body.value, draft: draft.checked });
+      closeFn();
+      toast(url, 'info', 'Pull request created');
+      openExternal(url);
+      await refresh();
+      loadRemoteInfo(true);
+    } catch (e) {
+      error.textContent = e.message;
+      createBtn.disabled = false;
+      createBtn.textContent = 'Create pull request';
+    }
+  });
+  fillTitle();
+}
+
+// ============================================================ images
+
+const imageCache = new Map(); // key -> Promise of { before, after }
+
+function commitImages(c, f) {
+  return {
+    before: f.kind === 'new' || !c.parents.length ? null : { rev: c.sha + '^', path: f.orig || f.path },
+    after: f.kind === 'deleted' ? null : { rev: c.sha, path: f.path },
+  };
+}
+
+// Before and after side by side, like GitHub Desktop's "2-up" view. The diff
+// text is part of the key: its blob ids change whenever the image does.
+function imageDiff(images, path, diffText) {
+  const key = `${S.repo.path}\0${JSON.stringify(images)}\0${diffText}`;
+  if (!imageCache.has(key)) {
+    if (imageCache.size > 30) imageCache.clear();
+    imageCache.set(key, git.getImageVersions(ex, S.repo.path, images.before, images.after));
+  }
+  const box = h('div', { class: 'diff image-diff' }, h('div', { class: 'diff-notice' }, 'Loading image…'));
+  const type = git.imageType(path);
+  const side = (label, v, kind) => {
+    if (!v) return null;
+    const caption = h('div', { class: 'image-caption' }, formatSize(v.size));
+    const content = v.base64
+      ? h('img', {
+          src: `data:${type};base64,${v.base64}`,
+          alt: label,
+          onload: (e) => caption.replaceChildren(`${e.target.naturalWidth} × ${e.target.naturalHeight} px · ${formatSize(v.size)}`),
+        })
+      : h('div', { class: 'diff-notice' }, `Too large to preview (${formatSize(v.size)}).`);
+    return h('div', { class: `image-side ${kind}` }, h('div', { class: 'image-label' }, label), h('div', { class: 'image-frame' }, content), caption);
+  };
+  imageCache.get(key).then(
+    (v) => box.replaceChildren(h('div', { class: 'image-pair' }, side('Before', v.before, 'del'), side('After', v.after, 'add'))),
+    (e) => {
+      imageCache.delete(key);
+      box.replaceChildren(h('div', { class: 'diff-notice' }, h('div', { class: 'error-box' }, e.message)));
+    },
+  );
+  return box;
+}
+
+const formatSize = (n) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
 
 // ============================================================ branch actions
 
@@ -2582,7 +2837,13 @@ function init() {
       tauri.window?.getCurrentWindow?.().hide();
     } catch {}
   }
-  $('#tb-branch').addEventListener('click', () => branchPopover());
+  $('#tb-branch').addEventListener('click', (e) => {
+    if (e.target.closest('#tb-ci')) {
+      const R = S.remote;
+      return R.checks?.length && checksPopover($('#tb-ci'), R.checks, R.sha);
+    }
+    branchPopover();
+  });
   $('#tb-sync').addEventListener('click', () => runSync());
   const syncMenu = (x, y) => {
     const remote = S.status?.remote?.name;
@@ -2591,6 +2852,10 @@ function init() {
       { label: `Fetch ${remote}`, run: () => runSync({ kind: 'fetch', run: () => git.fetchRemote(ex, S.repo.path, remote) }) },
       S.status.branch.upstream && { label: `Pull ${remote}`, run: () => runSync({ kind: 'pull', run: () => git.pull(ex, S.repo.path) }) },
       S.status.branch.head && { label: `Push ${remote}`, run: () => runSync({ kind: 'push', run: () => git.push(ex, S.repo.path, { remote, hasUpstream: !!S.status.branch.upstream }) }) },
+      S.remote.pr && S.remote.branch === S.status.branch.head ? '-' : canCreatePr() && '-',
+      S.remote.pr && S.remote.branch === S.status.branch.head
+        ? { label: `View Pull Request #${S.remote.pr.number}`, run: () => openExternal(S.remote.pr.url) }
+        : canCreatePr() && { label: 'Create Pull Request…', run: () => createPrModal() },
     ]);
   };
   $('#tb-sync').addEventListener('contextmenu', (e) => {

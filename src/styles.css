@@ -730,3 +730,25 @@ kbd { font: 12px var(--mono); padding: 1px 6px; border: 1px solid var(--border);
 .stash-actions { display: flex; gap: 6px; flex: none; }
 .check.choice { align-items: flex-start; padding: 6px 0; }
 .check.choice input { margin-top: 2px; }
+
+.ci-badge { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex: none; }
+.ci-badge svg { width: 14px; height: 14px; }
+.ci-badge.success { color: var(--st-new); }
+.ci-badge.failure { color: var(--danger); }
+.ci-badge.pending::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: #d29922; }
+.tb-btn .ci-badge { margin-right: 2px; cursor: pointer; border-radius: 4px; }
+.tb-btn .ci-badge:hover { background: var(--toolbar-hover); }
+.pop-item .title .ci-badge { vertical-align: -3px; margin-left: 4px; }
+.checks-summary { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+.checks-summary:hover { color: var(--text); }
+.image-diff { padding: 16px; font-family: var(--font); }
+.image-pair { display: flex; gap: 16px; align-items: flex-start; justify-content: center; flex-wrap: wrap; }
+.image-side { flex: 1 1 260px; max-width: 520px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.image-label { font-weight: 600; font-size: 12px; }
+.image-side.del .image-label { color: var(--danger); }
+.image-side.add .image-label { color: var(--st-new); }
+.image-frame { border: 1px solid var(--border); border-radius: 6px; padding: 8px; display: flex; justify-content: center; background-color: var(--panel); background-image: linear-gradient(45deg, rgba(128,128,128,.18) 25%, transparent 25%, transparent 75%, rgba(128,128,128,.18) 75%), linear-gradient(45deg, rgba(128,128,128,.18) 25%, transparent 25%, transparent 75%, rgba(128,128,128,.18) 75%); background-size: 16px 16px; background-position: 0 0, 8px 8px; }
+.image-side.del .image-frame { border-color: var(--danger); }
+.image-side.add .image-frame { border-color: var(--st-new); }
+.image-frame img { max-width: 100%; max-height: 60vh; object-fit: contain; }
+.image-caption { color: var(--muted); font-size: 12px; text-align: center; }

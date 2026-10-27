@@ -28,7 +28,7 @@ RemoteGit checks for new versions on its own and shows a popup with **Install an
 - Changed files with checkboxes and a diff with line numbers and **syntax highlighting** (GitHub's colors, about 35 languages).
 - **Commit only some lines**: click the gutter (or drag over it) to choose lines, or click a `@@` header for the whole block.
 - Summary, description, **co-authors** (`@login` or `Name <email>`), and options to bypass hooks, add a Signed-off-by trailer or allow an empty commit.
-- **AI commit message**: the ✨ button asks Claude Code or Codex on the server to describe the selected changes in the style of your recent commits. Pick one in ⚙ or leave it on Auto (Claude Code first). Codex runs read-only. No API key in the app.
+- **AI commit message**: the ✨ button asks Claude Code or Codex on the server to describe the selected changes in the style of your recent commits. When both are installed, a small menu lets you pick one. Codex runs read-only. No API key in the app.
 - **Undo** the last commit. Right-click a file to discard it, add it to `.gitignore`, or copy its path.
 
 ![Commit only some lines](docs/lines.png)

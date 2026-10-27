@@ -262,7 +262,8 @@ test('generateCommitMessage pipes the diff to claude on the server', async () =>
   writeFileSync(join(dir, 'b.txt'), 'brand new\n');
   const st = await git.getStatus(exec, dir);
 
-  assert.equal(await git.generateCommitMessage(exec, dir, st.files, true), null); // no claude yet
+  assert.deepEqual(await git.findAiTools(exec), []);
+  assert.equal(await git.generateCommitMessage(exec, dir, st.files, true, 'claude'), null); // no claude yet
 
   const bin = join(root, '.local', 'bin');
   mkdirSync(bin, { recursive: true });
@@ -272,7 +273,8 @@ test('generateCommitMessage pipes the diff to claude on the server', async () =>
     `#!/bin/sh\n[ "$1" = -p ] || exit 9\nprintf '%s' "$2" > ${root}/claude-prompt\ncat > ${root}/claude-input\nprintf '\\140\\140\\140\\nUpdate a.txt and add b.txt\\n\\nBody line.\\n\\140\\140\\140\\n'\n`,
     { mode: 0o755 },
   );
-  const msg = await git.generateCommitMessage(exec, dir, st.files, true);
+  assert.deepEqual((await git.findAiTools(exec)).map((t) => t.id), ['claude']);
+  const msg = await git.generateCommitMessage(exec, dir, st.files, true, 'claude');
   assert.deepEqual(msg, { summary: 'Update a.txt and add b.txt', description: 'Body line.' });
   const input = readFileSync(join(root, 'claude-input'), 'utf8');
   assert.match(input, /-old\n\+new/);
@@ -281,7 +283,7 @@ test('generateCommitMessage pipes the diff to claude on the server', async () =>
   rmSync(join(bin, 'claude'));
 });
 
-test('generateCommitMessage falls back to a read-only codex exec', async () => {
+test('generateCommitMessage runs codex exec read-only', async () => {
   const dir = newRepo();
   writeFileSync(join(dir, 'a.txt'), 'old\n');
   sh(dir, 'git add -A && git commit -qm "Add a"');
@@ -307,8 +309,7 @@ printf 'Change a.txt\\n\\nFrom codex.\\n' > "$out"
 `,
     { mode: 0o755 },
   );
-  assert.equal(await git.generateCommitMessage(exec, dir, st.files, true, 'claude'), null);
-  const msg = await git.generateCommitMessage(exec, dir, st.files, true);
+  const msg = await git.generateCommitMessage(exec, dir, st.files, true, 'codex');
   assert.deepEqual(msg, { summary: 'Change a.txt', description: 'From codex.' });
   assert.match(readFileSync(join(root, 'codex-input'), 'utf8'), /-old\n\+new/);
   const args = readFileSync(join(root, 'codex-args'), 'utf8');
@@ -316,14 +317,14 @@ printf 'Change a.txt\\n\\nFrom codex.\\n' > "$out"
   assert.match(args, /--ephemeral/);
   assert.match(args, /Add a/);
 
-  // Auto prefers Claude Code; 'codex' forces Codex.
-  writeFileSync(join(bin, 'claude'), '#!/bin/sh\ncat >/dev/null\necho From claude\n', { mode: 0o755 });
-  assert.equal((await git.generateCommitMessage(exec, dir, st.files, true)).summary, 'From claude');
-  assert.equal((await git.generateCommitMessage(exec, dir, st.files, true, 'codex')).summary, 'Change a.txt');
-
   // A failing codex reports its log instead of its progress output.
   writeFileSync(join(bin, 'codex'), '#!/bin/sh\n[ "$2" = --help ] && exit 0\necho "Not logged in" >&2\nexit 1\n', { mode: 0o755 });
   await assert.rejects(git.generateCommitMessage(exec, dir, st.files, true, 'codex'), /Not logged in/);
+
+  // Both installed: both are offered, Claude Code first.
+  writeFileSync(join(bin, 'claude'), '#!/bin/sh\ncat >/dev/null\necho From claude\n', { mode: 0o755 });
+  assert.deepEqual((await git.findAiTools(exec)).map((t) => t.id), ['claude', 'codex']);
+  assert.equal((await git.generateCommitMessage(exec, dir, st.files, true, 'claude')).summary, 'From claude');
   rmSync(join(bin, 'claude'));
   rmSync(join(bin, 'codex'));
 });

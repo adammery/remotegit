@@ -196,13 +196,43 @@ async function commitAll() {
 
 async function generate() {
   if (!T.status?.files.length || T.busy) return;
+  let tools = [];
   await busy('Writing the message', async () => {
-    const m = await git.generateCommitMessage(ex, T.repo.path, T.status.files, !!T.status.branch.oid, main.aiTool);
-    if (!m) throw new Error(`${git.aiToolName(main.aiTool)} was not found on the server. Install it there and sign in once.`);
-    T.draft = m.summary;
-    T.description = m.description;
+    tools = await git.findAiTools(ex);
+    if (!tools.length) throw new Error('No AI found on the server. Install Claude Code or Codex there and sign in once.');
+    if (tools.length === 1) await write(tools[0].id);
   });
+  const btn = document.getElementById('tray-ai');
+  if (tools.length > 1 && btn) {
+    const r = btn.getBoundingClientRect();
+    openMenu(r.right, r.bottom + 4, [{ label: 'Write the message with', disabled: true }, ...tools.map((t) => ({ label: t.name, run: () => busy('Writing the message', () => write(t.id)) }))]);
+  }
 }
+
+async function write(tool) {
+  const m = await git.generateCommitMessage(ex, T.repo.path, T.status.files, !!T.status.branch.oid, tool);
+  if (!m) throw new Error('That AI is no longer on the server.');
+  T.draft = m.summary;
+  T.description = m.description;
+}
+
+let menuEl = null;
+function closeMenu() {
+  menuEl?.remove();
+  menuEl = null;
+}
+function openMenu(right, top, items) {
+  closeMenu();
+  menuEl = h(
+    'div',
+    { class: 'menu' },
+    items.map((it) => h('div', { class: 'menu-item' + (it.disabled ? ' disabled' : ''), onclick: it.disabled ? null : () => { closeMenu(); it.run(); } }, it.label)),
+  );
+  document.body.append(menuEl);
+  menuEl.style.left = `${Math.max(8, right - menuEl.getBoundingClientRect().width)}px`;
+  menuEl.style.top = `${top}px`;
+}
+document.addEventListener('mousedown', (e) => menuEl && !menuEl.contains(e.target) && closeMenu());
 
 function undoable() {
   const st = T.status;
@@ -358,7 +388,7 @@ function statusParts() {
           'div',
           { class: 'input-row' },
           h('input', { id: 'tray-summary', placeholder: 'Summary (required)', oninput: updateCommitButton, onkeydown: (e) => e.key === 'Enter' && commitAll() }),
-          h('button', { class: 'btn', type: 'button', title: 'Write the message with AI (on the server)', html: T.busy === 'Writing the message' ? icons.spinner : icons.sparkle, disabled: !!T.busy, onclick: generate }),
+          h('button', { class: 'btn', id: 'tray-ai', type: 'button', title: 'Write the message with AI (on the server)', html: T.busy === 'Writing the message' ? icons.spinner : icons.sparkle, disabled: !!T.busy, onclick: generate }),
         ),
         st.remote &&
           h(

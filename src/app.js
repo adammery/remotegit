@@ -15,7 +15,6 @@ const store = Object.assign(
     sidebarWidth: 300,
     theme: 'system',
     commitOpts: { noVerify: false, signoff: false, allowEmpty: false },
-    aiTool: 'auto',
   },
   readStore(),
 );
@@ -533,6 +532,8 @@ function toggleCoAuthors() {
   if (!input.hidden) input.focus();
 }
 
+// Looks for the AI CLIs on every click: one found is used right away, several
+// are offered in a small menu under the button.
 async function generateMessage() {
   const files = checkedFiles();
   if (!S.repo || !files.length) return toast('Check the files the message should describe.', 'info', 'Nothing selected');
@@ -540,11 +541,31 @@ async function generateMessage() {
   if (btn.disabled) return;
   btn.disabled = true;
   btn.innerHTML = icons.spinner;
+  let tools = [];
   try {
-    const m = await git.generateCommitMessage(ex, S.repo.path, files, hasHead(), store.aiTool);
+    tools = await git.findAiTools(ex);
+  } catch (e) {
+    toast(e.message, 'error', 'Could not look for AI tools');
+  }
+  btn.disabled = false;
+  btn.innerHTML = icons.sparkle;
+  if (!tools.length) {
+    if (S.repo) toast('Install Claude Code or Codex on the server and sign in there once (run `claude` or `codex`). RemoteGit uses it to write the message.', 'error', 'No AI found on the server');
+    return;
+  }
+  if (tools.length === 1) return writeMessage(tools[0].id, files);
+  const r = btn.getBoundingClientRect();
+  openMenu(r.left, r.bottom + 4, [{ label: 'Write the message with', disabled: true }, ...tools.map((t) => ({ label: t.name, run: () => writeMessage(t.id, files) }))]);
+}
+
+async function writeMessage(tool, files) {
+  const btn = $('#ai-btn');
+  btn.disabled = true;
+  btn.innerHTML = icons.spinner;
+  try {
+    const m = await git.generateCommitMessage(ex, S.repo.path, files, hasHead(), tool);
     if (!m) {
-      const name = git.aiToolName(store.aiTool);
-      toast(`Install ${name} on the server and sign in there once (run \`claude\` or \`codex\`). RemoteGit uses it to write the message.`, 'error', `${name} not found on the server`);
+      toast(`${git.AI_TOOLS.find((t) => t.id === tool)?.name} is no longer on the server.`, 'error', 'AI not found');
     } else {
       $('#summary').value = m.summary;
       $('#description').value = m.description;
@@ -1321,9 +1342,6 @@ function settingsPopover() {
             h('input', { type: 'checkbox', checked: !!trayPrefs().menuBarOnly, disabled: !trayPrefs().showInMenuBar, onchange: (e) => { setMenuBarOnly(e.target.checked); fill(); } }),
             h('span', {}, h('b', {}, isMac ? 'Hide from the Dock' : 'Hide from the taskbar'), h('br'), h('span', { class: 'hint' }, 'Closing the window keeps RemoteGit running in the menu bar.')),
           ),
-          h('div', { class: 'settings-label' }, 'AI commit messages'),
-          seg([['auto', 'Auto'], ['claude', 'Claude'], ['codex', 'Codex']], store.aiTool || 'auto', (v) => { store.aiTool = v; save(); fill(); }),
-          h('div', { class: 'settings-hint' }, store.aiTool === 'claude' || store.aiTool === 'codex' ? `Written by ${git.aiToolName(store.aiTool)} on the server.` : 'Written by Claude Code on the server, or by Codex when Claude Code isn’t installed.'),
           h('button', { class: 'btn btn-block', type: 'button', onclick: () => { closePopover(); shortcutsModal(); } }, 'Keyboard shortcuts'),
           h(
             'div',
@@ -1764,8 +1782,8 @@ command -v codex >/dev/null 2>&1 && echo "codex ok" || echo "codex missing"`,
         line(true, draft.local ? `Running as ${who || 'you'} on this computer` : `Connected as ${who || draft.host}`),
         line(!!gitVer, gitVer ? `Git ${gitVer}` : 'Git is not installed on the server'),
         line(/^gh ok$/m.test(out), /^gh ok$/m.test(out) ? 'GitHub CLI signed in — pull requests available' : /^gh signed-out$/m.test(out) ? `GitHub CLI found but not signed in (run gh auth login ${draft.local ? 'in a terminal' : 'on the server'})` : 'GitHub CLI not installed — no pull request list'),
-        line(/^claude ok$/m.test(out), /^claude ok$/m.test(out) ? 'Claude Code found — AI commit messages available' : 'Claude Code not installed'),
-        line(/^codex ok$/m.test(out), /^codex ok$/m.test(out) ? 'Codex found — AI commit messages available' : 'Codex not installed'),
+        line(/^claude ok$/m.test(out), /^claude ok$/m.test(out) ? 'Claude Code found — writes AI commit messages' : 'Claude Code not installed'),
+        line(/^codex ok$/m.test(out), /^codex ok$/m.test(out) ? (/^claude ok$/m.test(out) ? 'Codex found — used when Claude Code is missing' : 'Codex found — writes AI commit messages') : 'Codex not installed'),
       );
     } catch (e) {
       error.textContent = e.message;

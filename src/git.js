@@ -558,14 +558,26 @@ export function parseCoAuthors(text) {
 /** Where Claude Code and Codex usually live when the login shell doesn't say. */
 export const AI_PATH = 'PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.claude/local:/usr/local/bin:$PATH"';
 
-export const aiToolName = (tool) => ({ claude: 'Claude Code', codex: 'Codex' })[tool] || 'Claude Code or Codex';
+/** AI CLIs that can write commit messages, in the order they're offered. */
+export const AI_TOOLS = [
+  { id: 'claude', name: 'Claude Code' },
+  { id: 'codex', name: 'Codex' },
+];
+
+/** Which of AI_TOOLS are installed on the server. */
+export async function findAiTools(exec) {
+  const out = await run(exec, `${AI_PATH}
+for t in ${AI_TOOLS.map((t) => t.id).join(' ')}; do command -v "$t" >/dev/null 2>&1 && echo "$t"; done; true`);
+  const found = out.split('\n');
+  return AI_TOOLS.filter((t) => found.includes(t.id));
+}
 
 /**
- * Asks Claude Code or Codex on the server for a commit message for `files`, in
- * the style of the recent history. `tool` is 'auto' (Claude first), 'claude' or
- * 'codex'. Returns null when that tool isn't installed.
+ * Asks `tool` ('claude' or 'codex') on the server for a commit message for
+ * `files`, in the style of the recent history. Returns null when it isn't
+ * installed.
  */
-export async function generateCommitMessage(exec, repo, files, hasHead, tool = 'auto') {
+export async function generateCommitMessage(exec, repo, files, hasHead, tool) {
   const tracked = files.filter((f) => hasHead && f.xy !== '??');
   const untracked = files.filter((f) => !hasHead || f.xy === '??').slice(0, 30);
   const diffs = [
@@ -581,13 +593,8 @@ export async function generateCommitMessage(exec, repo, files, hasHead, tool = '
     inRepo(
       repo,
       `${AI_PATH}
-want=${q(tool)}
-ai=
-for t in claude codex; do
-  [ "$want" = auto ] || [ "$want" = "$t" ] || continue
-  command -v "$t" >/dev/null 2>&1 && { ai=$t; break; }
-done
-[ -n "$ai" ] || exit 127
+ai=${q(tool)}
+command -v "$ai" >/dev/null 2>&1 || exit 127
 recent=$(${GIT} log -n 15 --format=%s 2>/dev/null)
 prompt=$(printf '%s\n%s\n\n%s' ${q(intro)} "$recent" ${q(outro)})
 changes() { { ${diffs.map((d) => `${d};`).join(' ') || 'true;'} } | head -c 120000; }

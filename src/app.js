@@ -745,7 +745,7 @@ function renderChanges() {
             ? `${op[0].toUpperCase() + op.slice(1)} in progress — commit to finish it.`
             : '',
     ),
-    state.length && h('button', { class: 'btn btn-sm', type: 'button', disabled: !!S.busy, onclick: () => confirmAbort(op) }, `Abort ${op}`),
+    state.length ? h('button', { class: 'btn btn-sm', type: 'button', disabled: !!S.busy, onclick: () => confirmAbort(op) }, `Abort ${op}`) : '',
   );
 
   const list = $('#file-list');
@@ -2846,8 +2846,9 @@ command -v codex >/dev/null 2>&1 && echo "codex ok" || echo "codex missing"`,
         line(/^gh ok$/m.test(out), /^gh ok$/m.test(out) ? 'GitHub CLI signed in — pull requests available' : /^gh signed-out$/m.test(out) ? `GitHub CLI found but not signed in (run gh auth login ${draft.local ? 'in a terminal' : 'on the server'})` : 'GitHub CLI not installed — no pull request list'),
         line(/^claude ok$/m.test(out), /^claude ok$/m.test(out) ? 'Claude Code found — writes AI commit messages' : 'Claude Code not installed'),
         line(/^codex ok$/m.test(out), /^codex ok$/m.test(out) ? (/^claude ok$/m.test(out) ? 'Codex found — used when Claude Code is missing' : 'Codex found — writes AI commit messages') : 'Codex not installed'),
-        (!gitVer || !/^gh ok$/m.test(out)) &&
-          h('button', { class: 'btn btn-sm', type: 'button', style: 'margin-top:6px;align-self:flex-start', onclick: () => (draft.local ? setupModal : serverSetupModal)({ ...draft, id: 'setup-' + uid() }) }, draft.local ? 'Set up this computer…' : 'Set up the server…'),
+        !gitVer || !/^gh ok$/m.test(out)
+          ? h('button', { class: 'btn btn-sm', type: 'button', style: 'margin-top:6px;align-self:flex-start', onclick: () => (draft.local ? setupModal : serverSetupModal)({ ...draft, id: 'setup-' + uid() }) }, draft.local ? 'Set up this computer…' : 'Set up the server…')
+          : '',
       );
     } catch (e) {
       error.textContent = e.message;

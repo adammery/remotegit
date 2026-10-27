@@ -2083,7 +2083,7 @@ function createRepoModal(preselected) {
     body: [
       store.servers.length > 1 && field('Server', serverSelect),
       field('Name', name),
-      h('label', { class: 'field' }, h('span', {}, 'In folder'), h('div', { class: 'input-row' }, where, h('button', { class: 'btn', type: 'button', onclick: () => folderBrowser(server, where.value.trim() || '~', (p) => (where.value = p)) }, h('span', { html: icons.folder }), 'Choose…'))),
+      h('label', { class: 'field' }, h('span', {}, 'In folder'), h('div', { class: 'input-row' }, where, h('button', { class: 'btn', type: 'button', onclick: () => chooseFolder(server, where.value.trim() || '~', (p) => (where.value = p)) }, h('span', { html: icons.folder }), 'Choose…'))),
       field('Description', description),
       h('label', { class: 'check' }, readme, 'Initialize with a README'),
       field('Git Ignore', gitignore),
@@ -2248,7 +2248,7 @@ function newWorktreeModal(repo, server) {
       h('p', { class: 'hint', style: 'margin:0 0 10px' }, 'A second working folder of the same repository, on its own branch: work on two branches at once without stashing.'),
       field('Branch', branch, 'An existing branch, or a new one that starts at the current commit.'),
       options,
-      h('label', { class: 'field' }, h('span', {}, 'Folder'), h('div', { class: 'input-row' }, path, h('button', { class: 'btn', type: 'button', onclick: () => folderBrowser(server, parent, (p) => { edited = false; path.value = `${p}/${repo.name}-${branch.value.trim().replace(/[^\w.-]+/g, '-') || 'worktree'}`; }) }, h('span', { html: icons.folder }), 'Choose…'))),
+      h('label', { class: 'field' }, h('span', {}, 'Folder'), h('div', { class: 'input-row' }, path, h('button', { class: 'btn', type: 'button', onclick: () => chooseFolder(server, dirOf(path.value) || parent, (p) => { edited = false; path.value = `${p}/${repo.name}-${branch.value.trim().replace(/[^\w.-]+/g, '-') || 'worktree'}`; }) }, h('span', { html: icons.folder }), 'Choose…'))),
       error,
     ],
     foot: (close) => [h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'), btn],
@@ -2667,7 +2667,7 @@ function cloneModal(preselected) {
           'div',
           { class: 'input-row' },
           path,
-          h('button', { class: 'btn', type: 'button', onclick: () => folderBrowser(server, parent, (p) => { parent = p; pathEdited = false; updatePath(); }) }, h('span', { html: icons.folder }), 'Choose…'),
+          h('button', { class: 'btn', type: 'button', onclick: () => chooseFolder(server, dirOf(path.value) || parent, (p) => { parent = p; pathEdited = false; updatePath(); }) }, h('span', { html: icons.folder }), 'Choose…'),
         ),
       ),
       error,
@@ -3391,11 +3391,25 @@ async function cherryPickModal(c) {
   });
 }
 
-function folderBrowser(server, start, onPick) {
+const dirOf = (path) => path.trim().replace(/\/+$/, '').replace(/\/[^/]*$/, '');
+
+/** A folder to put something in: the system dialog on this computer, the folder browser on a server. */
+async function chooseFolder(server, start, onPick) {
+  if (server.local && tauri.dialog) {
+    const picked = await tauri.dialog.open({ directory: true, multiple: false, defaultPath: start.startsWith('~') ? undefined : start, title: 'Choose a folder' }).catch(() => null);
+    if (typeof picked === 'string') onPick(picked);
+    return;
+  }
+  folderBrowser(server, start, onPick, { anyFolder: true });
+}
+
+// `anyFolder`: pick where something goes (clone, new repository, worktree)
+// instead of an existing repository.
+function folderBrowser(server, start, onPick, { anyFolder = false } = {}) {
   const run = (script, t) => execOn(server, script, t);
   const crumbs = h('div', { class: 'crumbs' });
   const list = h('div', { class: 'browser', tabindex: '0' });
-  const pickBtn = h('button', { class: 'btn btn-primary', type: 'button', disabled: true }, 'Add this repository');
+  const pickBtn = h('button', { class: 'btn btn-primary', type: 'button', disabled: true }, anyFolder ? 'Choose this folder' : 'Add this repository');
   let current = null;
   let close;
   const join = (base, name) => `${base === '/' ? '' : base}/${name}`;
@@ -3409,7 +3423,7 @@ function folderBrowser(server, start, onPick) {
       { class: 'browser-row' + (isRepo ? ' repo' : ''), onclick: () => go(path), title: path },
       h('span', { html: up ? icons.up : isRepo ? icons.repo : icons.folder }),
       h('span', { class: 'grow' }, label),
-      isRepo && h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: (e) => { e.stopPropagation(); pick(path); } }, 'Add'),
+      isRepo && !anyFolder && h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: (e) => { e.stopPropagation(); pick(path); } }, 'Add'),
     );
   const go = async (path) => {
     list.replaceChildren(h('div', { class: 'pop-empty' }, 'Loading…'));
@@ -3421,8 +3435,8 @@ function folderBrowser(server, start, onPick) {
         h('button', { class: 'crumb', type: 'button', onclick: () => go('/') }, '/'),
         ...parts.map((part, i) => h('button', { class: 'crumb', type: 'button', onclick: () => go('/' + parts.slice(0, i + 1).join('/')) }, part)),
       );
-      pickBtn.disabled = !res.isRepo;
-      pickBtn.textContent = res.isRepo ? 'Add this repository' : 'This folder is not a Git repository';
+      pickBtn.disabled = !anyFolder && !res.isRepo;
+      pickBtn.textContent = anyFolder ? `Choose “${parts[parts.length - 1] || '/'}”` : res.isRepo ? 'Add this repository' : 'This folder is not a Git repository';
       list.replaceChildren(
         ...[
           res.path !== '/' && row('..', res.path.replace(/\/[^/]+$/, '') || '/', { up: true }),
@@ -3439,7 +3453,7 @@ function folderBrowser(server, start, onPick) {
   close = openModal({
     title: `Folders on ${server.name || server.host}`,
     wide: true,
-    body: [crumbs, list, h('div', { class: 'hint' }, 'Click a folder to open it. Git repositories have the repository icon and an Add button.')],
+    body: [crumbs, list, h('div', { class: 'hint' }, anyFolder ? 'Open the folder it should go in, then choose it.' : 'Click a folder to open it. Git repositories have the repository icon and an Add button.')],
     foot: (c) => [h('button', { class: 'btn', type: 'button', onclick: c }, 'Cancel'), pickBtn],
   });
   go(start);

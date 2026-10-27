@@ -616,6 +616,15 @@ function vscodeUrl(repo = S.repo, s = S.server) {
   return `vscode://vscode-remote/ssh-remote+${encodeURI(host)}${encodeURI(repo.path)}`;
 }
 
+/** `ssh -t host 'cmd'` with the server's port, key and user, for running `cmd` in a terminal. */
+function sshRun(s, cmd) {
+  const parts = ['ssh', '-t'];
+  if (s.port) parts.push('-p', String(s.port));
+  if (s.identityFile) parts.push('-i', JSON.stringify(s.identityFile));
+  parts.push((s.user ? `${s.user}@` : '') + s.host, git.q(cmd));
+  return parts.join(' ');
+}
+
 function sshCommand(repo = S.repo, s = S.server) {
   const parts = ['ssh', '-t'];
   if (s.port) parts.push('-p', String(s.port));
@@ -1014,6 +1023,7 @@ function errorView() {
         h('button', { class: 'btn btn-primary', type: 'button', onclick: () => { forgetConnection(S.server.id); refresh(); } }, 'Try again'),
         conn && !S.server.local && h('button', { class: 'btn', type: 'button', onclick: () => serverModal(S.server) }, 'Edit server'),
         S.server.local && h('button', { class: 'btn', type: 'button', onclick: () => setupModal(S.server, () => { forgetConnection(S.server.id); refresh(); }) }, 'Set up this computer…'),
+        !S.server.local && /git: (command )?not found|git: No such file/i.test(S.error.message) && h('button', { class: 'btn', type: 'button', onclick: () => serverSetupModal(S.server, () => { forgetConnection(S.server.id); refresh(); }) }, 'Set up the server…'),
         !conn && h('button', { class: 'btn', type: 'button', onclick: () => removeRepo(S.repo) }, 'Remove from list'),
       ),
     ),
@@ -2836,7 +2846,8 @@ command -v codex >/dev/null 2>&1 && echo "codex ok" || echo "codex missing"`,
         line(/^gh ok$/m.test(out), /^gh ok$/m.test(out) ? 'GitHub CLI signed in — pull requests available' : /^gh signed-out$/m.test(out) ? `GitHub CLI found but not signed in (run gh auth login ${draft.local ? 'in a terminal' : 'on the server'})` : 'GitHub CLI not installed — no pull request list'),
         line(/^claude ok$/m.test(out), /^claude ok$/m.test(out) ? 'Claude Code found — writes AI commit messages' : 'Claude Code not installed'),
         line(/^codex ok$/m.test(out), /^codex ok$/m.test(out) ? (/^claude ok$/m.test(out) ? 'Codex found — used when Claude Code is missing' : 'Codex found — writes AI commit messages') : 'Codex not installed'),
-        draft.local && (!gitVer || !/^gh ok$/m.test(out)) && h('button', { class: 'btn btn-sm', type: 'button', style: 'margin-top:6px', onclick: () => setupModal({ ...draft, id: 'setup-' + uid() }) }, 'Set up this computer…'),
+        (!gitVer || !/^gh ok$/m.test(out)) &&
+          h('button', { class: 'btn btn-sm', type: 'button', style: 'margin-top:6px;align-self:flex-start', onclick: () => (draft.local ? setupModal : serverSetupModal)({ ...draft, id: 'setup-' + uid() }) }, draft.local ? 'Set up this computer…' : 'Set up the server…'),
       );
     } catch (e) {
       error.textContent = e.message;
@@ -2925,6 +2936,104 @@ async function localTools(server) {
     if (/Git for Windows/.test(e.message)) return { git: false, gh: false, ghSignedIn: false, brew: false, os: 'Windows', noShell: true };
     return { git: false, gh: false, ghSignedIn: false, brew: false, os: '', error: e.message };
   }
+}
+
+// A server: install over SSH when that needs no password (root, sudo without a
+// password, Homebrew); otherwise the exact command to run in a terminal, since
+// a sudo password can't be passed safely through the non-interactive session.
+function serverSetupModal(server, onReady) {
+  let info = null;
+  let busy = null;
+  let failure = '';
+  const body = h('div', { class: 'setup' });
+  const doneBtn = h('button', { class: 'btn btn-primary', type: 'button' }, onReady ? 'Continue' : 'Done');
+  const run = (script, t) => execOn(server, script, t);
+  const where = server.name || server.host;
+
+  const recheck = async () => {
+    busy = 'Checking…';
+    render();
+    forgetConnection(server.id);
+    try {
+      info = await git.checkServer(run);
+      failure = '';
+    } catch (e) {
+      failure = e.message;
+    }
+    busy = null;
+    render();
+  };
+  const install = async (tools, label) => {
+    busy = `Installing ${label} on ${where}…`;
+    render();
+    try {
+      await git.installOnServer(run, info, tools);
+      failure = '';
+    } catch (e) {
+      failure = e.message.split('\n').slice(-6).join('\n');
+    }
+    await recheck();
+  };
+  const action = (tools, label) => {
+    if (!info.pm) return null;
+    if (info.root || info.sudo || info.pm === 'brew')
+      return h('button', { class: 'btn btn-sm btn-primary', type: 'button', disabled: !!busy, onclick: () => install(tools, label) }, 'Install');
+    return h('button', { class: 'btn btn-sm', type: 'button', onclick: () => copyText(sshRun(server, git.installCommand(info.pm, tools))) }, 'Copy command');
+  };
+  const how = (tools) => {
+    if (!info.pm) return ' Install it with the server’s package manager.';
+    if (info.root || info.sudo || info.pm === 'brew') return '';
+    return [' sudo asks for a password, so run this in a terminal:', h('code', { class: 'setup-cmd' }, sshRun(server, git.installCommand(info.pm, tools)))];
+  };
+  const row = (ok, title, sub, act, optional) =>
+    h(
+      'div',
+      { class: 'setup-row' + (ok ? ' ok' : optional ? ' optional' : '') },
+      h('span', { class: 'setup-mark', html: ok ? icons.check : icons.x }),
+      h('div', { class: 'grow' }, h('div', { class: 'title' }, title, optional && h('span', { class: 'tag-badge' }, 'optional')), h('div', { class: 'sub' }, sub)),
+      !ok && act,
+    );
+  const render = () => {
+    if (!info) {
+      body.replaceChildren(failure ? h('div', { class: 'error-box' }, failure) : h('div', { class: 'hint setup-busy' }, h('span', { html: icons.spinner }), busy || 'Checking…'));
+      doneBtn.disabled = true;
+      return;
+    }
+    const signIn = sshRun(server, 'gh auth login');
+    body.replaceChildren(
+      h('p', { class: 'hint', style: 'margin:0 0 12px' }, `What RemoteGit uses on ${where}.`),
+      row(info.git, 'Git', info.git ? 'Installed.' : ['Needed for everything.', how(['git'])], action(['git'], 'git')),
+      row(
+        info.gh && info.ghSignedIn,
+        'GitHub CLI',
+        info.gh && info.ghSignedIn
+          ? 'Installed and signed in.'
+          : info.gh
+            ? ['Installed. Sign in once on the server:', h('code', { class: 'setup-cmd' }, signIn)]
+            : ['For pull requests, CI status and creating repositories on GitHub.', how(['gh'])],
+        info.gh ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => copyText(signIn) }, 'Copy command') : action(['gh'], 'the GitHub CLI'),
+        true,
+      ),
+      failure ? h('div', { class: 'error-box' }, failure) : '',
+      busy ? h('div', { class: 'hint setup-busy' }, h('span', { html: icons.spinner }), busy) : '',
+    );
+    doneBtn.disabled = !info.git || !!busy;
+  };
+  const closeFn = openModal({
+    title: `Set up ${where}`,
+    wide: true,
+    body: [body],
+    foot: (close) => [
+      h('button', { class: 'btn left', type: 'button', onclick: () => !busy && recheck() }, 'Check again'),
+      h('button', { class: 'btn', type: 'button', onclick: close }, 'Close'),
+      doneBtn,
+    ],
+  });
+  doneBtn.addEventListener('click', () => {
+    closeFn();
+    onReady?.();
+  });
+  recheck();
 }
 
 // Only what RemoteGit needs: git (required) and the GitHub CLI (optional, for

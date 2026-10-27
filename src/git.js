@@ -906,6 +906,65 @@ true`,
   return { git: has('git'), gh: has('gh'), ghSignedIn: has('gh-auth'), brew: has('brew'), os: /^os (.+)$/m.exec(out)?.[1] || '' };
 }
 
+// --------------------------------------------------------- server setup
+
+// Package names per package manager; `gh` isn't packaged as "gh" everywhere.
+const PACKAGES = {
+  apt: { git: 'git', gh: 'gh' },
+  dnf: { git: 'git', gh: 'gh' },
+  yum: { git: 'git', gh: 'gh' },
+  apk: { git: 'git', gh: 'github-cli' },
+  pacman: { git: 'git', gh: 'github-cli' },
+  zypper: { git: 'git', gh: 'gh' },
+  brew: { git: 'git', gh: 'gh' },
+};
+
+const INSTALL = {
+  apt: (p) => `apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ${p}`,
+  dnf: (p) => `dnf install -y -q ${p}`,
+  yum: (p) => `yum install -y -q ${p}`,
+  apk: (p) => `apk add --no-cache ${p}`,
+  pacman: (p) => `pacman -Sy --noconfirm ${p}`,
+  zypper: (p) => `zypper -n -q install ${p}`,
+  brew: (p) => `brew install ${p}`,
+};
+
+/**
+ * What a server has and how things could be installed there:
+ * { git, gh, ghSignedIn, pm, root, sudo } — `sudo` means sudo works without a password.
+ */
+export async function checkServer(exec) {
+  const out = await run(
+    exec,
+    `PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+command -v git >/dev/null 2>&1 && git --version >/dev/null 2>&1 && echo git
+if command -v gh >/dev/null 2>&1; then echo gh; GH_PROMPT_DISABLED=1 gh auth status >/dev/null 2>&1 && echo gh-auth; fi
+for pm in apt-get dnf yum apk pacman zypper brew; do command -v $pm >/dev/null 2>&1 && { echo "pm $pm"; break; }; done
+[ "$(id -u)" = 0 ] && echo root
+command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null && echo sudo
+true`,
+    30,
+  );
+  const has = (w) => new RegExp(`^${w}$`, 'm').test(out);
+  const pm = /^pm (\S+)$/m.exec(out)?.[1]?.replace('apt-get', 'apt') || null;
+  return { git: has('git'), gh: has('gh'), ghSignedIn: has('gh-auth'), pm, root: has('root'), sudo: has('sudo') };
+}
+
+/** The shell command that installs `tools` ('git', 'gh') with `pm`, with sudo unless root or Homebrew. */
+export function installCommand(pm, tools, { root = false } = {}) {
+  if (!INSTALL[pm]) return null;
+  const cmd = INSTALL[pm](tools.map((t) => PACKAGES[pm][t]).join(' '));
+  if (root || pm === 'brew') return cmd;
+  // sudo for each part of "a && b" (sudo takes the VAR=value prefix too).
+  return cmd.split(' && ').map((c) => `sudo ${c}`).join(' && ');
+}
+
+/** Installs `tools` on the server; only when it needs no password (root, sudo -n or Homebrew). */
+export function installOnServer(exec, info, tools) {
+  const cmd = info.root || info.pm === 'brew' ? installCommand(info.pm, tools, { root: true }) : installCommand(info.pm, tools).replace(/sudo /g, 'sudo -n ');
+  return run(exec, `PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"\n${cmd}`, 900);
+}
+
 /** Folders in `path` on the server, for the in-app folder browser. */
 export async function listDir(exec, path) {
   const out = await run(

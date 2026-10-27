@@ -774,3 +774,14 @@ test('checkTools reports git, gh and its sign-in', async () => {
   assert.equal(t.ghSignedIn, true);
   rmSync(join(bin, 'gh'));
 });
+
+test('server setup: what is there and the install command per system', async () => {
+  const t = await git.checkServer(exec);
+  assert.equal(t.git, true);
+  assert.ok(t.pm === null || typeof t.pm === 'string');
+  assert.equal(git.installCommand('apt', ['git', 'gh']), 'sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git gh');
+  assert.equal(git.installCommand('apt', ['git'], { root: true }), 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git');
+  assert.equal(git.installCommand('apk', ['git', 'gh']), 'sudo apk add --no-cache git github-cli');
+  assert.equal(git.installCommand('brew', ['gh']), 'brew install gh');
+  assert.equal(git.installCommand('nix', ['git']), null);
+});

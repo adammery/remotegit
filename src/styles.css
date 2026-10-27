@@ -813,3 +813,4 @@ kbd { font: 12px var(--mono); padding: 1px 6px; border: 1px solid var(--border);
 .setup-row.optional .setup-mark { background: #d29922; }
 .setup-mark svg { width: 12px; height: 12px; }
 .setup-busy { display: flex; align-items: center; gap: 6px; }
+.setup-cmd { display: block; margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: var(--panel); border: 1px solid var(--border); font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-all; user-select: text; -webkit-user-select: text; color: var(--text); }

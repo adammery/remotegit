@@ -62,7 +62,7 @@ RemoteGit checks for new versions on its own and shows a popup with **Install an
 - Right-click a repository: **alias**, **worktrees** (show them, or add one for another branch), copy name or path, View on GitHub, terminal, Finder, VS Code, remove.
 - **New** creates a repository on the server like GitHub Desktop does: description, README, a Git Ignore template and a license, and optionally on GitHub too, under your account or one of your organizations. **Clone** clones one.
 - **This computer**: use repositories on your own Mac or PC as well, like GitHub Desktop. If git (Git for Windows on Windows) or the GitHub CLI is missing, **Set up this computer** installs it with one click: Apple's Command Line Tools installer on a Mac (and Homebrew for `gh`), winget on Windows, or the download page otherwise.
-- **Test connection** checks SSH, git, the GitHub CLI, Claude Code and Codex on the server.
+- **Test connection** checks SSH, git, the GitHub CLI, Claude Code and Codex on the server. When git or the GitHub CLI is missing, **Set up the server** finds the package manager (apt, dnf, yum, apk, pacman, zypper, Homebrew) and installs it with one click when you're root or sudo needs no password; otherwise it gives you the exact `ssh -t … 'sudo …'` command to run in a terminal.
 - Add repositories by scanning the server (`~`, `/var/www`, `/srv`), by path, or with a **folder browser** that walks the server's folders.
 - **Clone** a repository onto the server: pick one of your GitHub repositories (via the GitHub CLI there, so private ones work) or paste any Git URL.
 - Pick your SSH key with a file dialog. "Open in VS Code" opens the repo through Remote-SSH; "Copy SSH command" gives you a terminal in the repo folder.

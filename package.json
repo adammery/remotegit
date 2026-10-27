@@ -2,7 +2,7 @@
   "name": "remotegit",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "type": "module",
   "scripts": {
     "tauri": "tauri",

@@ -759,3 +759,18 @@ esac
   rmSync(join(bin, 'gh'));
   assert.equal(await git.getRepoOptions(exec), null);
 });
+
+test('checkTools reports git, gh and its sign-in', async () => {
+  const bin = join(root, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, 'gh'), '#!/bin/sh\n[ "$1 $2" = "auth status" ] && exit 1\nexit 0\n', { mode: 0o755 });
+  let t = await git.checkTools(exec);
+  assert.equal(t.git, true);
+  assert.equal(t.gh, true);
+  assert.equal(t.ghSignedIn, false);
+  assert.ok(t.os);
+  writeFileSync(join(bin, 'gh'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  t = await git.checkTools(exec);
+  assert.equal(t.ghSignedIn, true);
+  rmSync(join(bin, 'gh'));
+});

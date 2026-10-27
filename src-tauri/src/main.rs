@@ -211,6 +211,38 @@ fn set_menu_bar_only(app: AppHandle, state: State<'_, MenuBarOnly>, enabled: boo
     }
 }
 
+/// Windows only: installs Git for Windows or the GitHub CLI with winget, in its
+/// own console window so the progress and any admin prompt are visible. Fails
+/// when winget isn't there; the UI then links to the download page instead.
+#[tauri::command]
+fn install_tool(tool: String) -> Result<(), String> {
+    let id = match tool.as_str() {
+        "git" => "Git.Git",
+        "gh" => "GitHub.cli",
+        _ => return Err(format!("Unknown tool {tool}")),
+    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        use std::process::Command;
+        Command::new("winget").arg("--version").output().map_err(|_| "winget is not available".to_string())?;
+        // `start` takes the first quoted argument as the window title, so the
+        // command line is passed as is.
+        Command::new("cmd")
+            .raw_arg(format!(
+                "/C start \"Installing\" winget install --id {id} -e --source winget --accept-source-agreements --accept-package-agreements"
+            ))
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = id;
+        Err("Only used on Windows".into())
+    }
+}
+
 /// Created on first use: the icon only appears once the user turns it on.
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open RemoteGit", true, None::<&str>)?;
@@ -275,7 +307,8 @@ fn main() {
             show_main_window,
             set_tray_status,
             set_tray_visible,
-            set_menu_bar_only
+            set_menu_bar_only,
+            install_tool
         ])
         .run(tauri::generate_context!())
         .expect("error while running RemoteGit");

@@ -883,6 +883,29 @@ done`,
   return result;
 }
 
+/**
+ * What RemoteGit needs on this computer: { git, gh, ghSignedIn, brew, os }.
+ * On a Mac without the Command Line Tools /usr/bin/git is only a stub, and
+ * running it would pop up Apple's installer, so it isn't run then.
+ */
+export async function checkTools(exec) {
+  const out = await run(
+    exec,
+    `PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+g=$(command -v git 2>/dev/null)
+if [ -n "$g" ] && ! { [ "$g" = /usr/bin/git ] && [ "$(uname)" = Darwin ] && ! xcode-select -p >/dev/null 2>&1; }; then
+  git --version >/dev/null 2>&1 && echo git
+fi
+if command -v gh >/dev/null 2>&1; then echo gh; GH_PROMPT_DISABLED=1 gh auth status >/dev/null 2>&1 && echo gh-auth; fi
+command -v brew >/dev/null 2>&1 && echo brew
+echo "os $(uname)"
+true`,
+    30,
+  );
+  const has = (w) => new RegExp(`^${w}$`, 'm').test(out);
+  return { git: has('git'), gh: has('gh'), ghSignedIn: has('gh-auth'), brew: has('brew'), os: /^os (.+)$/m.exec(out)?.[1] || '' };
+}
+
 /** Folders in `path` on the server, for the in-app folder browser. */
 export async function listDir(exec, path) {
   const out = await run(

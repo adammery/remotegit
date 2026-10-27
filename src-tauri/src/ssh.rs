@@ -88,7 +88,12 @@ pub fn local_shell() -> Result<Command, String> {
             "Local repositories on Windows need Git for Windows (it provides sh.exe). Install it from git-scm.com."
                 .to_string()
         })?;
-        Ok(Command::new(sh))
+        let mut cmd = Command::new(sh);
+        // A GitHub CLI installed while RemoteGit runs isn't on its PATH yet.
+        if let (Ok(path), Ok(pf)) = (std::env::var("PATH"), std::env::var("ProgramFiles")) {
+            cmd.env("PATH", format!("{path};{pf}\\GitHub CLI"));
+        }
+        Ok(cmd)
     }
     #[cfg(not(windows))]
     {

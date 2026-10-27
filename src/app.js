@@ -1012,7 +1012,8 @@ function errorView() {
         'div',
         { style: 'display:flex;gap:8px;margin-top:16px' },
         h('button', { class: 'btn btn-primary', type: 'button', onclick: () => { forgetConnection(S.server.id); refresh(); } }, 'Try again'),
-        conn && h('button', { class: 'btn', type: 'button', onclick: () => serverModal(S.server) }, 'Edit server'),
+        conn && !S.server.local && h('button', { class: 'btn', type: 'button', onclick: () => serverModal(S.server) }, 'Edit server'),
+        S.server.local && h('button', { class: 'btn', type: 'button', onclick: () => setupModal(S.server, () => { forgetConnection(S.server.id); refresh(); }) }, 'Set up this computer…'),
         !conn && h('button', { class: 'btn', type: 'button', onclick: () => removeRepo(S.repo) }, 'Remove from list'),
       ),
     ),
@@ -2831,10 +2832,11 @@ command -v codex >/dev/null 2>&1 && echo "codex ok" || echo "codex missing"`,
       const gitVer = /^git version (\S+)/m.exec(out)?.[1];
       report.replaceChildren(
         line(true, draft.local ? `Running as ${who || 'you'} on this computer` : `Connected as ${who || draft.host}`),
-        line(!!gitVer, gitVer ? `Git ${gitVer}` : 'Git is not installed on the server'),
+        line(!!gitVer, gitVer ? `Git ${gitVer}` : draft.local ? 'Git is not installed on this computer' : 'Git is not installed on the server (e.g. sudo apt install git)'),
         line(/^gh ok$/m.test(out), /^gh ok$/m.test(out) ? 'GitHub CLI signed in — pull requests available' : /^gh signed-out$/m.test(out) ? `GitHub CLI found but not signed in (run gh auth login ${draft.local ? 'in a terminal' : 'on the server'})` : 'GitHub CLI not installed — no pull request list'),
         line(/^claude ok$/m.test(out), /^claude ok$/m.test(out) ? 'Claude Code found — writes AI commit messages' : 'Claude Code not installed'),
         line(/^codex ok$/m.test(out), /^codex ok$/m.test(out) ? (/^claude ok$/m.test(out) ? 'Codex found — used when Claude Code is missing' : 'Codex found — writes AI commit messages') : 'Codex not installed'),
+        draft.local && (!gitVer || !/^gh ok$/m.test(out)) && h('button', { class: 'btn btn-sm', type: 'button', style: 'margin-top:6px', onclick: () => setupModal({ ...draft, id: 'setup-' + uid() }) }, 'Set up this computer…'),
       );
     } catch (e) {
       error.textContent = e.message;
@@ -2897,15 +2899,135 @@ async function addThisComputer() {
   const existing = store.servers.find((s) => s.local);
   if (existing) return addRepoModal(existing);
   const server = { id: uid(), name: 'This computer', host: 'localhost', local: true };
+  const add = () => {
+    store.servers.push(server);
+    save();
+    renderAll();
+    addRepoModal(server);
+  };
+  // Straight on when everything is there; otherwise show what to install first.
+  const tools = await localTools(server);
+  if (tools.git && tools.gh && tools.ghSignedIn) return add();
+  setupModal(server, add, tools);
+}
+
+// ============================================================ setting up this computer
+
+const isWindows = /Windows/.test(navigator.userAgent);
+
+/** checkTools() for this computer; on Windows without Git for Windows there is no shell to ask. */
+async function localTools(server) {
+  forgetConnection(server.id);
   try {
     await connect(server);
+    return await git.checkTools((script, t) => execOn(server, script, t));
   } catch (e) {
-    return toast(e.message, 'error', 'Can’t use git on this computer');
+    if (/Git for Windows/.test(e.message)) return { git: false, gh: false, ghSignedIn: false, brew: false, os: 'Windows', noShell: true };
+    return { git: false, gh: false, ghSignedIn: false, brew: false, os: '', error: e.message };
   }
-  store.servers.push(server);
-  save();
-  renderAll();
-  addRepoModal(server);
+}
+
+// Only what RemoteGit needs: git (required) and the GitHub CLI (optional, for
+// pull requests, CI status and GitHub repositories).
+function setupModal(server, onReady, initial) {
+  let tools = initial;
+  let busy = null;
+  const body = h('div', { class: 'setup' });
+  const continueBtn = h('button', { class: 'btn btn-primary', type: 'button' }, onReady ? 'Continue' : 'Done');
+  const run = (script, t) => execOn(server, script, t);
+  const mac = () => tools.os === 'Darwin' || (!tools.os && isMac);
+  const win = () => tools.os === 'Windows' || /MINGW|MSYS/.test(tools.os) || (!tools.os && isWindows);
+
+  const recheck = async () => {
+    busy = 'Checking…';
+    render();
+    tools = await localTools(server);
+    busy = null;
+    render();
+  };
+  // Windows: winget in a console window; elsewhere or without winget, the download page.
+  const winget = (tool, page) => tauri.core.invoke('install_tool', { tool }).then(
+    () => toast('Follow the installer window, then click Check again.', 'info', 'Installing'),
+    () => openExternal(page),
+  );
+  const installGit = async () => {
+    if (win()) return winget('git', 'https://git-scm.com/download/win');
+    if (mac()) {
+      await run('xcode-select --install 2>/dev/null; true').catch(() => {});
+      return toast('Click “Install” in the macOS window. When it’s done, click Check again.', 'info', 'Installing the Command Line Tools');
+    }
+    openExternal('https://git-scm.com/downloads');
+  };
+  const installGh = async () => {
+    if (win()) return winget('gh', 'https://cli.github.com');
+    if (mac() && tools.brew) {
+      busy = 'Installing the GitHub CLI with Homebrew…';
+      render();
+      try {
+        await run('PATH="/opt/homebrew/bin:/usr/local/bin:$PATH" brew install gh', 900).then((r) => r.code && Promise.reject(new Error(r.stderr.trim().split('\n').pop())));
+      } catch (e) {
+        toast(e.message, 'error', 'Homebrew could not install gh');
+      }
+      return recheck();
+    }
+    openExternal('https://cli.github.com');
+  };
+
+  const row = (ok, title, sub, action, optional) =>
+    h(
+      'div',
+      { class: 'setup-row' + (ok ? ' ok' : optional ? ' optional' : '') },
+      h('span', { class: 'setup-mark', html: ok ? icons.check : icons.x }),
+      h('div', { class: 'grow' }, h('div', { class: 'title' }, title, optional && h('span', { class: 'tag-badge' }, 'optional')), h('div', { class: 'sub' }, sub)),
+      !ok && action,
+    );
+  const render = () => {
+    const t = tools;
+    const gitAction = h('button', { class: 'btn btn-sm btn-primary', type: 'button', disabled: !!busy, onclick: installGit }, win() || mac() ? 'Install' : 'Download');
+    const ghAction = t.gh
+      ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => copyText('gh auth login') }, 'Copy command')
+      : h('button', { class: 'btn btn-sm', type: 'button', disabled: !!busy, onclick: installGh }, win() || (mac() && t.brew) ? 'Install' : 'Download');
+    body.replaceChildren(
+      h('p', { class: 'hint', style: 'margin:0 0 12px' }, 'RemoteGit uses the tools installed on this computer. Install what’s missing, then check again.'),
+      row(
+        t.git,
+        win() ? 'Git for Windows' : 'Git',
+        t.git ? 'Installed.' : win() ? 'Git and the shell RemoteGit runs it in. Installs with winget (Windows asks for permission).' : mac() ? 'Comes with Apple’s Command Line Tools; macOS shows its installer.' : 'Install git with your package manager.',
+        gitAction,
+      ),
+      row(
+        t.gh && t.ghSignedIn,
+        'GitHub CLI',
+        t.gh && t.ghSignedIn
+          ? 'Installed and signed in.'
+          : t.gh
+            ? 'Installed. Sign in once: run “gh auth login” in a terminal.'
+            : 'For pull requests, CI status and creating repositories on GitHub.' + (mac() && !t.brew ? ' Download it, or install Homebrew first.' : ''),
+        ghAction,
+        true,
+      ),
+      t.error ? h('div', { class: 'error-box' }, t.error) : '',
+      busy ? h('div', { class: 'hint setup-busy' }, h('span', { html: icons.spinner }), busy) : '',
+    );
+    continueBtn.disabled = !t.git || !!busy;
+    continueBtn.title = t.git ? '' : 'Git is needed first';
+  };
+  const closeFn = openModal({
+    title: 'Set up this computer',
+    wide: true,
+    body: [body],
+    foot: (close) => [
+      h('button', { class: 'btn left', type: 'button', onclick: () => !busy && recheck() }, 'Check again'),
+      h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'),
+      continueBtn,
+    ],
+  });
+  continueBtn.addEventListener('click', () => {
+    closeFn();
+    onReady?.();
+  });
+  if (tools) render();
+  else recheck();
 }
 
 function removeServer(server) {

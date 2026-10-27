@@ -802,3 +802,14 @@ kbd { font: 12px var(--mono); padding: 1px 6px; border: 1px solid var(--border);
 .diff-table.split .srow > .dl:first-child { border-right: 1px solid var(--border); }
 .diff-table.split .dl.empty { background: repeating-linear-gradient(135deg, transparent 0 6px, rgba(128,128,128,.08) 6px 12px); }
 .diff-table.split .dl.hunk, .diff-table.split .dl.meta { width: 100%; }
+
+.setup { display: flex; flex-direction: column; gap: 8px; }
+.setup-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; }
+.setup-row .grow { flex: 1; min-width: 0; }
+.setup-row .title { font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.setup-row .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.setup-mark { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; border-radius: 50%; flex: none; color: #fff; background: var(--danger); }
+.setup-row.ok .setup-mark { background: var(--st-new); }
+.setup-row.optional .setup-mark { background: #d29922; }
+.setup-mark svg { width: 12px; height: 12px; }
+.setup-busy { display: flex; align-items: center; gap: 6px; }

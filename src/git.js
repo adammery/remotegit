@@ -25,6 +25,15 @@ const GIT =
 
 const inRepo = (repo, body) => `cd ${qpath(repo)} || exit 128\n${body}`;
 
+// HTTPS remotes on github.com sign in through a logged-in GitHub CLI, like
+// \`gh auth setup-git\` but without touching the user's git config.
+const GH_CREDENTIALS = `PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+if gh auth token -h github.com >/dev/null 2>&1; then
+export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.https://github.com.helper GIT_CONFIG_VALUE_0=
+export GIT_CONFIG_KEY_1=credential.https://github.com.helper GIT_CONFIG_VALUE_1='!gh auth git-credential'
+fi`;
+const onNet = (repo, body) => inRepo(repo, `${GH_CREDENTIALS}\n${body}`);
+
 // The GitHub CLI, also when it's installed in ~/.local/bin; exit 127 without it.
 const GH = 'GH_PROMPT_DISABLED=1 NO_COLOR=1 gh';
 const ghPath = 'PATH="$HOME/.local/bin:/usr/local/bin:$PATH"\ncommand -v gh >/dev/null 2>&1 || exit 127';
@@ -32,6 +41,8 @@ const ghPath = 'PATH="$HOME/.local/bin:/usr/local/bin:$PATH"\ncommand -v gh >/de
 export class GitError extends Error {}
 
 function must(r) {
+  if (r.code !== 0 && /could not read Username for 'https:\/\/github\.com'/.test(r.stderr))
+    throw new GitError('GitHub needs you to sign in. Install the GitHub CLI and run "gh auth login", then try again.');
   if (r.code !== 0) throw new GitError((r.stderr || r.stdout).trim() || `Command failed (exit ${r.code})`);
   return r.stdout;
 }
@@ -533,7 +544,7 @@ export const deleteBranch = (exec, repo, name, { force = false } = {}) =>
 /** "origin/feature" → deletes feature on origin. */
 export function deleteRemoteBranch(exec, repo, upstream) {
   const i = upstream.indexOf('/');
-  return run(exec, inRepo(repo, `${GIT} push -q ${q(upstream.slice(0, i))} --delete ${q(upstream.slice(i + 1))}`), NET_TIMEOUT);
+  return run(exec, onNet(repo, `${GIT} push -q ${q(upstream.slice(0, i))} --delete ${q(upstream.slice(i + 1))}`), NET_TIMEOUT);
 }
 
 /** How many commits `branch` would bring into HEAD. */
@@ -557,13 +568,13 @@ export function mergeBranch(exec, repo, branch, { squash = false } = {}) {
 // --------------------------------------------------------------- remote
 
 export const fetchRemote = (exec, repo, remote) =>
-  run(exec, inRepo(repo, `${GIT} fetch --prune ${q(remote)}`), NET_TIMEOUT);
+  run(exec, onNet(repo, `${GIT} fetch --prune ${q(remote)}`), NET_TIMEOUT);
 
 // Merge unless the user configured pull.rebase themselves.
 export const pull = (exec, repo) =>
   run(
     exec,
-    inRepo(
+    onNet(
       repo,
       `if ${GIT} config --get pull.rebase >/dev/null; then ${GIT} pull --no-edit
 else ${GIT} pull --no-edit --no-rebase; fi`,
@@ -575,7 +586,7 @@ else ${GIT} pull --no-edit --no-rebase; fi`,
 export const push = (exec, repo, { remote, hasUpstream }) =>
   run(
     exec,
-    inRepo(repo, hasUpstream ? `${GIT} push --follow-tags` : `${GIT} push --follow-tags -u ${q(remote)} HEAD`),
+    onNet(repo, hasUpstream ? `${GIT} push --follow-tags` : `${GIT} push --follow-tags -u ${q(remote)} HEAD`),
     NET_TIMEOUT,
   );
 
@@ -780,7 +791,7 @@ export function cloneRepo(exec, source, path) {
   const short = /^[\w.-]+\/[\w.-]+$/.test(src);
   return run(
     exec,
-    `PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+    `${GH_CREDENTIALS}
 [ -e ${qpath(path)} ] && { echo ${q(`${path} already exists.`)} >&2; exit 1; }
 mkdir -p "$(dirname ${qpath(path)})" || exit 1
 ${

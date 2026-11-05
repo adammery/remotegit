@@ -583,12 +583,19 @@ else ${GIT} pull --no-edit --no-rebase; fi`,
   );
 
 // --follow-tags sends the annotated tags created with createTag().
-export const push = (exec, repo, { remote, hasUpstream }) =>
-  run(
+export async function push(exec, repo, { remote, hasUpstream }) {
+  if (hasUpstream) {
+    // Fetch first: if the remote moved on, warn and let the user pull instead of pushing blind.
+    const behind = Number(await run(exec, onNet(repo, `${GIT} fetch -q && ${GIT} rev-list --count ${q('HEAD..@{u}')}`), NET_TIMEOUT));
+    if (behind)
+      throw new GitError(`The remote has ${behind} new commit${behind === 1 ? '' : 's'} you don’t have yet. Pull first, then push.`);
+  }
+  return run(
     exec,
     onNet(repo, hasUpstream ? `${GIT} push --follow-tags` : `${GIT} push --follow-tags -u ${q(remote)} HEAD`),
     NET_TIMEOUT,
   );
+}
 
 // ------------------------------------------------------ commit actions
 

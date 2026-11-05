@@ -1,6 +1,6 @@
 [package]
 name = "remotegit"
-version = "0.5.7"
+version = "0.5.8"
 edition = "2021"
 description = "GitHub Desktop-style Git client for repositories on SSH servers"
 

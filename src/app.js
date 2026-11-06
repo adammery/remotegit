@@ -251,6 +251,7 @@ async function refresh() {
     loadRemoteInfo(headMoved || pushed);
     prefillMergeMessage();
     loadGitHubUser(S.server);
+    autoFetch(st);
     if (S.tab === 'changes' && !S.stashView) await refreshDiff();
   } catch (e) {
     if (gen !== S.gen) return;
@@ -261,6 +262,19 @@ async function refresh() {
   } finally {
     statusInFlight = false;
   }
+}
+
+// Without a fetch, ahead/behind compare against an old copy of the remote and
+// the Push button can offer commits the remote already has.
+const AUTO_FETCH_SECONDS = 600;
+const autoFetchAt = new Map(); // repo id -> last attempt, so an offline remote isn't retried every poll
+function autoFetch(st) {
+  const now = Date.now() / 1000;
+  const repo = S.repo;
+  if (S.busy || !st.remote || !st.branch.upstream || now - (st.lastFetched || 0) < AUTO_FETCH_SECONDS) return;
+  if (now - (autoFetchAt.get(repo.id) || 0) < AUTO_FETCH_SECONDS) return;
+  autoFetchAt.set(repo.id, now);
+  git.fetchRemote(ex, repo.path, st.remote.name).then(() => S.repo === repo && refresh(), () => {});
 }
 
 async function refreshDiff() {
